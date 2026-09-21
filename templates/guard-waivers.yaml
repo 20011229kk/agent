@@ -1,0 +1,37 @@
+# TEMPLATE — qa/plan/guard-waivers.yaml
+#
+# 质量门槛变化提示的豁免声明。
+#
+# 关键规则：
+#   1. 豁免必须**同时**提供 reason 与 alternative_coverage，缺一不生效。
+#      只写"先跳过，回头再说"的豁免会被忽略，提示仍然计入 reviewer 阻断项。
+#   2. 本文件位于 qa/plan/**，属受保护路径，新增豁免需 CODEOWNERS 审批。
+#   3. 豁免只关闭"提示"，不代表质量风险消失 —— 它记录的是"风险已被人评估并接受"。
+#
+# 拷贝到 qa/plan/guard-waivers.yaml 后删除本段说明。
+---
+waivers:
+  # 示例：某个测试因上游接口下线而跳过，覆盖由手工用例承接
+  - code: SKIP_ADDED
+    file: tests/test_legacy_sms.py
+    reason: "上游短信网关已于 2026-09 下线，该接口不再提供服务"
+    alternative_coverage: "TC-20（手工用例，验证降级提示文案）"
+
+  # 示例：删除重复测试
+  - code: TEST_FILE_DELETED
+    file: tests/test_login_dup.py
+    reason: "与 tests/test_login.py 内容重复，为同一 TC-1 的两份实现"
+    alternative_coverage: "tests/test_login.py 保留，TC-1 映射不变"
+
+# 可用的 code 取值（见 scripts/guard_scan.py）:
+#   SKIP_ADDED               新增跳过标记
+#   ASSERTION_REMOVED        断言行减少
+#   THRESHOLD_CHANGED        阈值数字变化
+#   RETRY_POLICY_CHANGED     重试次数或策略变化
+#   IGNORE_WIDENED           新增忽略/抑制标记
+#   IGNORE_FILE_WIDENED      忽略文件新增规则
+#   TEST_FILE_DELETED        测试文件被删除
+#   PROTECTED_PATH_TOUCHED   触及受保护路径
+#
+# 注意：PROTECTED_PATH_TOUCHED 一般不应豁免 —— 受保护路径的变更本就需要审批，
+# 提示存在是为了让审批发生，而不是为了被消掉。

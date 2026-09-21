@@ -1,0 +1,58 @@
+# TEMPLATE — qa/baseline/<feature>/requirements.yaml
+#
+# 需求基线格式模板。基线是覆盖率的**分母**，由人维护与审批，任何 agent 一律不可写。
+# v1 采用方案 B：基线先独立审批合入目标分支，再提实现变更。
+#
+# 拷贝到 qa/baseline/<feature>/requirements.yaml 后删除本段说明。
+---
+# 基线元数据 —— 全部字段必填，缺任一字段 trace_matrix.py 判校验失败
+meta:
+  feature: example-login            # 特性标识，须与目录名一致
+  baseline_version: "1.0.0"         # 基线语义版本；内容有实质变更必须递增
+  confirmed_by: "zhang.san"         # 确认人（沿用现有需求评审 / PR 审批角色，不另建签字流程）
+  confirmed_at: "2026-09-20"
+  # 审批引用：指向平台审批记录（PR/MR 链接或审批 ID），不是仓库内的文件声明。
+  # 门禁校验此字段存在且非空；方案 A 下还需校验该路径变更确有平台审批记录。
+  baseline_approval_ref: "https://git.example.com/qa-agents/-/merge_requests/42"
+  # content_hash 由 scripts/trace_matrix.py --update-hash 计算写入。
+  # 哈希变更 → 关联运行证据标 STALE → 门禁判 INCOMPLETE。
+  content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+# 验收标准清单 —— 每条即一个 REQ，是覆盖率分母的单位
+requirements:
+  - id: REQ-1
+    # 一条可验证的验收标准。禁止"体验良好""正常工作"这类无法验证的描述。
+    statement: "用户名长度在 [3, 32] 字符范围内时，注册接口返回 201 且响应体含 userId"
+    # 风险等级用于用例优先级判定（P0 按风险判定，不按"每条 REQ 都要有 P0"）
+    risk: high                      # high | medium | low
+    # 非功能维度标注：留空表示该 REQ 无此维度要求；写 unknown 表示需求未说明（应被 qa-design 标阻塞）
+    nonfunctional:
+      performance: null
+      concurrency: null
+      permission: "仅未登录用户可调用"
+      compatibility: null
+      observability: "失败需记录 traceId"
+    # 是否为阻断项：门禁判定时，阻断项明确失败 → FAIL
+    blocking: true
+
+  - id: REQ-2
+    statement: "用户名长度为 2 或 33 字符时，注册接口返回 400 且错误码为 USERNAME_LENGTH_INVALID"
+    risk: high
+    nonfunctional:
+      performance: null
+      concurrency: null
+      permission: null
+      compatibility: null
+      observability: null
+    blocking: true
+
+  - id: REQ-3
+    statement: "同一用户名并发注册两次，仅一次返回 201，另一次返回 409 CONFLICT，且最终库中仅一条记录"
+    risk: high
+    nonfunctional:
+      performance: null
+      concurrency: "并发 2 请求，需保证幂等与唯一约束"
+      permission: null
+      compatibility: null
+      observability: null
+    blocking: true

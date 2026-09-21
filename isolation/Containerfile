@@ -1,0 +1,29 @@
+# qa-executor 的隔离执行镜像。
+#
+# 为什么要自己建镜像：run-isolated.sh 用 --network=none 执行，执行期拿不到外网，
+# 所以测试依赖必须在构建阶段装好并锁死版本；否则"执行期联网装依赖"会把刚刚
+# 关掉的那条外网通道又打开。
+#
+# 版本锁定理由：与宿主机现有工具链对齐（系统 python3 为 3.9.6 + pytest 8.4.2），
+# 避免容器内外测试行为不一致造成的假绿/假红。
+#
+# 构建（需要外网，属于构建期而非执行期）：
+#   podman build --platform linux/arm64 -t qa-executor:0.1.0 -f isolation/Containerfile .
+#
+# 注意 platform：宿主是 arm64，本机现存的 python:3.12-slim 是 amd64，
+# 用它跑会走模拟层（podman 会打印 platform 不匹配的 WARNING），慢且行为可能有差异。
+
+FROM docker.io/library/python:3.12-slim
+
+# pip 自身也锁版本，避免构建结果随时间漂移
+RUN python -m pip install --no-cache-dir --upgrade "pip==25.2" \
+ && python -m pip install --no-cache-dir "pytest==8.4.2" "PyYAML==6.0.2"
+
+# 不装 git / curl / sudo：执行期不需要，装了只会扩大边界
+# 不设 USER root 之外的用户：宿主机挂载的属主是调用者，改 UID 会导致可写挂载写不进去
+#   （若后续改为 --userns=keep-id 方案，这里要同步调整并重跑 verify-isolation.sh）
+
+WORKDIR /work
+
+# 默认什么都不做：真正要执行的命令由 run-isolated.sh 在 -- 之后传入
+CMD ["python", "-c", "print('qa-executor image; pass a command after -- instead')"]

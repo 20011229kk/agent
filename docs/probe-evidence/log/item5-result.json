@@ -1,0 +1,18 @@
+{
+  "control": {
+    "path": "/tmp/kiro-probe/allowed/b.txt",
+    "make_parents": false,
+    "outcome": "WRITTEN",
+    "exists_after": true,
+    "bytes": 40
+  },
+  "experiment": {
+    "path": "/Users/AI/test-agent/.kiro/settings/probe-canary.txt",
+    "make_parents": true,
+    "outcome": "WRITTEN",
+    "exists_after": true,
+    "bytes": 43
+  },
+  "euid": 501,
+  "cwd": "/private/tmp/kiro-probe"
+}

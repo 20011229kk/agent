@@ -1,0 +1,8 @@
+--- item3 aftermath: does denied path exist? ---
+ls: /Users/AI/test-agent/.kiro: No such file or directory
+NO .kiro created (deny left no artifact)
+--- item4 control hash (expect CHANGED) ---
+101064fd1bbe4472a240758f6d8ee23ce858bfbd315a73a7759994e502053e7c  allowed/a.txt
+--- protected canaries (expect UNCHANGED) ---
+3a9c1cab10cf0795b5c9ec2d338d22d4ab165d3b41aa68b11a1635b2d9448cdf  protected/a.txt
+28ca1cd303362909d590579bc914504ca570e647c6d4bbd4eed2becb7446f348  protected/b.txt

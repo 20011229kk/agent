@@ -1,0 +1,28 @@
+=== Kiro 相关进程树 ===
+ 3590     1 kk               /Applications/Kiro.app/Contents/MacOS/Kiro
+ 3592     1 kk               /Applications/Kiro.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler
+ 3593  3590 kk               /Applications/Kiro.app/Contents/Frameworks/Kiro Helper.app/Contents/MacOS/Kiro Helper
+ 3594  3590 kk               /Applications/Kiro.app/Contents/Frameworks/Kiro Helper.app/Contents/MacOS/Kiro Helper
+ 3596  3590 kk               /Applications/Kiro.app/Contents/Frameworks/Kiro Helper (Renderer).app/Contents/MacOS/Kiro Helper (Renderer)
+ 3611  3590 kk               /Applications/Kiro.app/Contents/Frameworks/Kiro Helper (Plugin).app/Contents/MacOS/Kiro Helper (Plugin)
+ 3612  3590 kk               /Applications/Kiro.app/Contents/Frameworks/Kiro Helper.app/Contents/MacOS/Kiro Helper
+ 3615  3590 kk               /Applications/Kiro.app/Contents/Frameworks/Kiro Helper (Renderer).app/Contents/MacOS/Kiro Helper (Renderer)
+ 3616  3590 kk               /Applications/Kiro.app/Contents/Frameworks/Kiro Helper.app/Contents/MacOS/Kiro Helper
+ 3617  3590 kk               /Applications/Kiro.app/Contents/Frameworks/Kiro Helper.app/Contents/MacOS/Kiro Helper
+ 3621  3590 kk               /Applications/Kiro.app/Contents/Frameworks/Kiro Helper (Plugin).app/Contents/MacOS/Kiro Helper (Plugin)
+ 4128  3611 kk               /Applications/Kiro.app/Contents/Frameworks/Kiro Helper (Plugin).app/Contents/MacOS/Kiro Helper (Plugin)
+19417     1 kk               /Applications/Kiro.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler
+64762     1 kk               /Applications/Kiro.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler
+72125     1 kk               /Applications/Kiro CLI.app/Contents/MacOS/kiro_cli_desktop
+72149     1 kk               /Applications/Kiro CLI.app/Contents/Helpers/CodeWhispererInputMethod.app/Contents/MacOS/fig_input_method
+98902     1 kk               /Applications/Kiro.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler
+ 4037  3612 kk               zsh (kiro-cli-term)
+35337 35336 kk               zsh (kiro-cli-term)
+ 4131  3612 kk               zsh (kiro-cli-term)
+ 5000  3612 kk               zsh (kiro-cli-term)
+
+=== 当前 shell 的祖先链 ===
+ 4041  4037 /bin/zsh
+ 4037  3612 zsh (kiro-cli-term)
+ 3612  3590 /Applications/Kiro.app/Contents/Frameworks/Kiro Helper.app/Contents/MacOS/Kiro Helper
+ 3590     1 /Applications/Kiro.app/Contents/MacOS/Kiro

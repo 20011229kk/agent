@@ -1,0 +1,38 @@
+目标: scripts/guard_scan.py + gate_check.py 的 guard 接线
+测试: tests/test_guard_scan.py（基线 65 项）、tests/test_gate_check.py（基线 68 项）
+代码状态: F1–F5 修复之后（复跑，模式已按重构修正）
+脚本: docs/probe-evidence/mutation_check_guard.py
+
+BASELINE test_gate_check.py: rc=0 68 passed in 0.34s
+
+=== 变异检验结果 ===
+[CAUGHT] skip 检测失效
+        18 failed, 47 passed in 0.16s
+[CAUGHT] 断言删除检测失效
+        5 failed, 60 passed in 0.12s
+[CAUGHT] 阈值方向判断反了（放宽说成收紧）
+        3 failed, 62 passed in 0.11s
+[CAUGHT] 测试文件删除不报
+        7 failed, 58 passed in 0.13s
+[CAUGHT] 受保护路径触及不报
+        7 failed, 58 passed in 0.13s
+[CAUGHT] 忽略标记新增不报
+        8 failed, 57 passed in 0.13s
+[CAUGHT] 豁免不要求替代覆盖（只写原因即可关闭）
+        1 failed, 64 passed in 0.11s
+[CAUGHT] 提示器升级为判定器（产生 QUALITY_FAILURE）
+        1 failed, 64 passed in 0.11s
+[CAUGHT] 去掉「提示，非结论」声明
+        4 failed, 61 passed in 0.12s
+[CAUGHT] 序列化时截断 hints
+        1 failed, 64 passed in 0.12s
+[CAUGHT] 未评审的提示项被静默忽略
+        8 failed, 60 passed in 0.45s
+[CAUGHT] guard 提示根本不进报告
+        2 failed, 66 passed in 0.39s
+
+恢复校验: OK
+总判定: ALL_MUTATIONS_CAUGHT
+
+备注: "guard 提示根本不进报告"的模式在 F4 修复（hints 先取出为 all_hints）后失效，
+已重定目标并捕获。

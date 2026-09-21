@@ -1,0 +1,67 @@
+
+======================================================================
+场景：一切齐备 → 期望 PASS
+======================================================================
+verdict           : PASS
+质量失败 / 证据缺失: 0 / 0
+last_result       : {'TC-1': True}
+gate_accepted     : {'TC-1': True}
+未验证项           : 无
+
+======================================================================
+场景：删掉运行记录 → 期望 INCOMPLETE（质量失败 0）
+======================================================================
+verdict           : INCOMPLETE
+质量失败 / 证据缺失: 0 / 4
+last_result       : {'TC-1': None}
+gate_accepted     : {'TC-1': None}
+未验证项           : ['TC-1', 'login']
+  [EVIDENCE_MISSING] RUN_EVIDENCE_ABSENT · login
+  [EVIDENCE_MISSING] REQUIRED_CASE_NOT_EXECUTED · TC-1
+  [EVIDENCE_MISSING] RUN_ABSENT · login
+  [EVIDENCE_MISSING] REQUIRED_CASE_RESULT_MISSING · TC-1
+
+======================================================================
+场景：必测用例失败 → 期望 FAIL
+======================================================================
+verdict           : FAIL
+质量失败 / 证据缺失: 1 / 0
+last_result       : {'TC-1': False}
+gate_accepted     : {'TC-1': False}
+未验证项           : 无
+  [QUALITY_FAILURE] REQUIRED_CASE_FAILED · TC-1
+
+======================================================================
+场景：先失败后通过 + 已确认阻断缺陷 → 期望 FAIL 且 last_result≠gate_accepted
+======================================================================
+verdict           : FAIL
+质量失败 / 证据缺失: 1 / 0
+last_result       : {'TC-1': True}
+gate_accepted     : {'TC-1': False}
+未验证项           : 无
+  [QUALITY_FAILURE] BLOCKING_DEFECT_NOT_CLEARED · TC-1
+
+======================================================================
+场景：带门槛下降的 diff → 提示进报告并要求评审确认
+======================================================================
+verdict           : INCOMPLETE
+质量失败 / 证据缺失: 0 / 1
+last_result       : {'TC-1': True}
+gate_accepted     : {'TC-1': True}
+未验证项           : ['guard_scan']
+  [HINT] GUARD_ASSERTION_REMOVED · tests/test_register.py
+  [HINT] GUARD_SKIP_ADDED · tests/test_concurrent.py
+  [HINT] GUARD_THRESHOLD_CHANGED · setup.cfg
+  [HINT] GUARD_RETRY_POLICY_CHANGED · pytest.ini
+  [HINT] GUARD_RETRY_POLICY_CHANGED · qa/plan/login/required-scope.yaml
+  [HINT] GUARD_PROTECTED_PATH_TOUCHED · qa/plan/login/required-scope.yaml
+  [HINT] GUARD_TEST_FILE_DELETED · tests/test_login_dup.py
+  [EVIDENCE_MISSING] GUARD_HINTS_UNREVIEWED · guard_scan
+
+======================================================================
+场景：基线 10 条、用例覆盖 8 条 → 期望精确报出 2 条未覆盖，分母仍为 10
+======================================================================
+req_total     : 10
+req_designed  : 8
+未覆盖         : ['REQ-10', 'REQ-9']
+EXIT=0

@@ -1,0 +1,17 @@
+{
+  "name": "probe-tagcheck",
+  "description": "ONE-OFF PROBE AGENT (Task 0 item 12). Lists every disputed tools tag so the operator can observe which are accepted, which are silently dropped, and which raise a load warning. Not a team agent config.",
+  "prompt": "You are a probe harness. When asked, enumerate the tools you actually have available, by name, and state which of these tags resolved to something: read, write, shell, web, subagent, knowledge, todo_list, spec, context. Report the literal tool names, not categories.",
+  "tools": [
+    "read",
+    "write",
+    "shell",
+    "web",
+    "subagent",
+    "knowledge",
+    "todo_list",
+    "spec",
+    "context"
+  ],
+  "allowedTools": ["read"]
+}

@@ -1,0 +1,52 @@
+归档自 .tmp-isolation-verify-arm64.txt（2026-09-21），镜像 localhost/qa-executor:0.1.0（arm64 原生，无 platform 警告）。
+复跑：QA_ISOLATION_IMAGE=localhost/qa-executor:0.1.0 zsh isolation/verify-isolation.sh
+
+=== 隔离验证 2026-09-21T11:37:55+0800 ===
+repo:   /Users/AI/test-agent
+image:  localhost/qa-executor:0.1.0
+canary before:  36b5ee47936393d01d5cf8cdbd6c2e23e7b6eb901cedc6aa5047bf19e476441a
+VERSION before: e9dd8507f4bf0c6f42458e41aea833ad0bd3f6127272335eee9bf4d58541ed67
+
+--- C1 阳性对照：可写挂载内写入应当成功 ---
+inner_rc=0
+runner_rc=0
+C1 宿主机可见: d8bf5f8b0b421b1bfb447fa96ca2420cc7b6d2106f21dbd9c73492b8114807fa
+C1 内容: WRITTEN-INSIDE-CONTAINER
+C1: PASS（挂载链路通，测量手段有效）
+
+--- C2 只读挂载内写入应当被拒绝（需同时拿到拒绝原文） ---
+inner_rc=2
+sh: 1: cannot create /work/.tmp-isolation-check/protected/canary.txt: Read-only file system
+runner_rc=0
+canary after: 36b5ee47936393d01d5cf8cdbd6c2e23e7b6eb901cedc6aa5047bf19e476441a
+C2: PASS（哈希未变 + 拿到 Read-only file system 拒绝原文）
+
+--- C3 未挂载的宿主机路径在容器内不存在 ---
+ls: cannot access '/Users': No such file or directory
+inner_rc=2
+runner_rc=0
+C3: PASS（靠不存在，不靠权限判定）
+
+--- C4 执行期无外网（--network=none） ---
+NETWORK_BLOCKED: OSError [Errno 101] Network is unreachable
+runner_rc=0
+C4: PASS
+
+--- C5 仓库根整体只读（不止显式受保护目录） ---
+inner_rc=2
+sh: 1: cannot create /work/VERSION: Read-only file system
+runner_rc=0
+VERSION after: e9dd8507f4bf0c6f42458e41aea833ad0bd3f6127272335eee9bf4d58541ed67
+C5: PASS（哈希未变 + 拒绝原文）
+
+=== 总判定 ===
+VERDICT: PASS（5/5，含阳性对照）
+作用域：本验证只覆盖**通过 shell 发起**的写入（item 5 那条路径）。
+工具级 fs_write 由 IDE 宿主进程执行，不经过本包装器（item 8）。
+=== 结束 ===
+
+---
+
+第一次运行（amd64 stock 镜像 docker.io/library/python:3.12-slim）同样 5/5 PASS，
+差别只是每条命令都带 platform 不匹配的 WARNING（走模拟层）。归档在
+isolation-verify-stock-amd64.txt 供对照。

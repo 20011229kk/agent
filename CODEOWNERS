@@ -1,0 +1,60 @@
+# CODEOWNERS — 受保护路径与审批归属
+#
+# 这是可信计算基的**强制点**。
+#
+# 为什么不靠权限规则：Task 0 item 5 已实测确认 shell 子进程的文件写入完全绕过 Kiro 的
+# 能力层（包括配置不可更改的 kiro-scope 硬拒绝）。因此只要某个 agent 具备 shell，
+# 它启动的测试进程就能改写本清单内的任何文件。`permissions` 的 deny 规则、以及 CI 里的
+# 哈希校验，都只能起**检测**作用，拦不住写入。
+#
+# 真正拦得住的只有：受保护分支 + 本文件要求的审批 + CI 从可信执行的原始产物重新生成证据。
+#
+# 占位符 @qa-owners / @qa-leads 需替换为真实用户或团队后生效。
+
+# ---- 默认 ----
+*                                   @qa-owners
+
+# ---- 需求基线：覆盖率的分母 ----
+# 候选变更不可单方面改动。v1 采用方案 B：基线先独立审批合入目标分支，再提实现变更。
+/qa/baseline/**                     @qa-leads
+
+# ---- 必测范围与重试策略、review_mode ----
+# 必测范围不得由运行结果反推；重试策略与评审模式变更属质量规则变化。
+/qa/plan/**                         @qa-leads
+
+# ---- 门禁脚本与规则 ----
+# 改检查逻辑同样能拿到绿灯，因此与基线同级保护。
+/scripts/gate_check.py              @qa-leads
+/scripts/guard_scan.py              @qa-leads
+/scripts/trace_matrix.py            @qa-leads
+/scripts/validate_spec.py           @qa-leads
+/scripts/validate_agents.py         @qa-leads
+
+# ---- CI 配置与本文件自身 ----
+/.github/**                         @qa-leads
+/.gitlab-ci.yml                     @qa-leads
+/Makefile                           @qa-leads
+/CODEOWNERS                         @qa-leads
+
+# ---- 证据重建脚本 ----
+# 改它等于改门禁输入的来源，与门禁脚本同级保护。
+/scripts/rebuild_run_json.py        @qa-leads
+
+# ---- 场景评测的 rubric 与 fixture ----
+# 改 rubric 等于改验收口径；改反例 fixture 可以让"知道自己做不了"这条检查失效。
+/evals/rubrics/**                   @qa-leads
+/evals/fixtures/**                  @qa-leads
+
+# ---- agent 与 steering 配置 ----
+# 实测：.kiro/agents/** 的"永久询问"在本环境退化为静默允许；.kiro/steering/** 无任何硬保护。
+# 因此这两处的保护只能来自本文件，不能来自平台。
+/.kiro/agents/**                    @qa-leads
+/steering/**                        @qa-leads
+
+# ---- spec 三件套 ----
+# tasks.md 是唯一任务状态来源；requirements/design 的变更影响验收口径。
+/.doc/specs/**                       @qa-leads
+
+# ---- 平台能力事实来源 ----
+# 能力矩阵决定哪些设计前提成立，改它等于改设计前提。
+/docs/capability-matrix.md          @qa-leads

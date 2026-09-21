@@ -1,0 +1,13 @@
+{
+  "name": "probe-parent-omit",
+  "description": "ONE-OFF PROBE AGENT (Task 0 items 7-① and 8). Parent that expresses 'I do not write' by OMITTING write/shell from tools, with NO permissions deny rule. Tests whether a spawned sub-agent can still write (item 7-①), and hosts the item 8 ask-layer probe. Not a team agent config.",
+  "prompt": "You are a probe harness parent. Delegate exactly what the operator asks to the named sub-agent and relay the sub-agent's raw result verbatim, per operation. Do not attempt any write yourself. If delegation itself required approval, say so explicitly and separately from whatever the sub-agent reported about its own tools.",
+  "tools": ["read", "subagent", "todo_list"],
+  "allowedTools": ["read"],
+  "toolsSettings": {
+    "subagent": {
+      "availableAgents": ["probe-write-scoped", "probe-write-ask"],
+      "trustedAgents": ["probe-write-scoped", "probe-write-ask"]
+    }
+  }
+}

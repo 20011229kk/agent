@@ -1,0 +1,45 @@
+--- meta.json ---
+{
+  "created_at": "2026-09-21T11:12:22+0800",
+  "pipe": "/tmp/kiro-fifo-control/pipe",
+  "probe_pid": 32940,
+  "sample_interval_s": 0.25,
+  "wait_for_writer_s": 90.0,
+  "drain_timeout_s": 120.0,
+  "watcher_pid": 32941
+}
+--- control-writer.json ---
+{
+  "started_at": "2026-09-21T11:12:22+0800",
+  "expected_writer_pid": 32944,
+  "expected_writer_comm": "python3"
+}
+--- watcher-done.json ---
+{
+  "finished_at": "2026-09-21T11:13:53+0800",
+  "writer_seen_in_lsof": false,
+  "samples_taken": 220,
+  "bytes_drained": 25,
+  "pipe_kind_after": "fifo",
+  "pipe_size_after": 0,
+  "elapsed_s": 90.4
+}
+--- lsof data lines (deduplicated) ---
+NO_WRITER_CAPTURED
+--- content.txt (25 bytes) ---
+CONTROL-WRITER-PID-32944
+
+RC=0
+=== head samples ===
+=== sample 00 t=0.03s ===
+=== sample 01 t=0.60s ===
+=== sample 02 t=0.99s ===
+=== sample 03 t=1.37s ===
+=== sample 04 t=1.76s ===
+=== sample 05 t=2.15s ===
+=== sample 06 t=2.54s ===
+=== sample 07 t=2.93s ===
+=== sample 08 t=3.32s ===
+=== sample 09 t=3.71s ===
+=== sample 10 t=4.10s ===
+=== sample 11 t=4.47s ===

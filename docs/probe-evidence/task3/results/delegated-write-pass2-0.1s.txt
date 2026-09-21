@@ -1,0 +1,22 @@
+marked after-delegated-write
+stop requested
+--- window ---
+samples: 148  span: 22.1s  (11:24:22 .. 11:24:45)
+--- marks ---
+11:24:22  t0-before-delegation
+11:24:44  after-delegated-write
+--- excluded 147 sampler-owned /bin/ps children (ppid=39042) ---
+--- processes created during the window: 9 ---
+t=   3.01s 11:24:25  pid=39106 ppid=5463 (/Applications/Podman Desktop.app/Contents/MacOS/Podman Desktop)  (podman-remote)
+t=   9.91s 11:24:32  pid=39205 ppid=69002 (launchd_sim /Users/kk/Library/Developer/CoreSimulator/Devices/50FE0202-95EC-42A8-9A25-D25C4D93079A/data/var/run/launchd_bootstrap.plist)  (managedappdistri)
+t=   9.91s 11:24:32  pid=39206 ppid=69002 (launchd_sim /Users/kk/Library/Developer/CoreSimulator/Devices/50FE0202-95EC-42A8-9A25-D25C4D93079A/data/var/run/launchd_bootstrap.plist)  (proactiveeventtr)
+t=   9.91s 11:24:32  pid=39207 ppid=69002 (launchd_sim /Users/kk/Library/Developer/CoreSimulator/Devices/50FE0202-95EC-42A8-9A25-D25C4D93079A/data/var/run/launchd_bootstrap.plist)  (facetimemessages)
+t=  13.22s 11:24:36  pid=39249 ppid=5463 (/Applications/Podman Desktop.app/Contents/MacOS/Podman Desktop)  (podman-remote)
+t=  19.97s 11:24:42  pid=39346 ppid=69002 (launchd_sim /Users/kk/Library/Developer/CoreSimulator/Devices/50FE0202-95EC-42A8-9A25-D25C4D93079A/data/var/run/launchd_bootstrap.plist)  xpcproxy_sim com.apple.managedappdistributiond
+t=  19.97s 11:24:42  pid=39347 ppid=69002 (launchd_sim /Users/kk/Library/Developer/CoreSimulator/Devices/50FE0202-95EC-42A8-9A25-D25C4D93079A/data/var/run/launchd_bootstrap.plist)  xpcproxy_sim com.apple.proactiveeventtrackerd
+t=  19.97s 11:24:42  pid=39348 ppid=69002 (launchd_sim /Users/kk/Library/Developer/CoreSimulator/Devices/50FE0202-95EC-42A8-9A25-D25C4D93079A/data/var/run/launchd_bootstrap.plist)  xpcproxy_sim com.apple.facetimemessagestored
+t=  22.08s 11:24:45  pid=39369 ppid=5004 (/bin/zsh --login)  sleep 2
+--- baseline processes that exited during the window: 2 ---
+pid=39044 /bin/ps -Ao pid=,ppid=,user=,lstart=,command=
+pid=39043 (Python)
+REPORT_RC=0
