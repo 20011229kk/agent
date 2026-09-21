@@ -1,0 +1,55 @@
+# 隔离执行的挂载策略。**调用方不能改变策略，只能在策略允许的范围内选择。**
+#
+# 为什么需要这份文件：上一版 run-isolated.sh 接受调用方给的任意 --rw，只检查目录存在。
+# 外部复核实测出两条真实绕过：`--rw qa/baseline`（把受保护的覆盖率分母重新挂成可写）、
+# `--rw ../outside`（穿越到仓库外的同级目录写入）。两条都成功、退出 0、宿主文件哈希变化。
+# 所以"可写范围"必须由这份策略决定，而不是由调用参数决定。
+#
+# 诚实的边界（不要把这份文件当成安全边界）：策略文件和校验器都在仓库里，
+# 一个对宿主机有写权限的 agent 可以直接改它们。它挡住的是"越权挂载请求"，
+# 挡不住"改掉规则本身"。真正的强制点仍然是受保护分支 + CODEOWNERS + CI 复核，
+# 或者把整个执行会话放进容器（那样 agent 一开始就在边界内）。
+# 详见 docs/protected-paths.md 的分层防护表。
+
+version: 1
+
+# 允许被请求为可写的路径（仓库内相对路径）。不在此列表内的 --rw 一律拒绝。
+# 取值依据 docs/protected-paths.md 的"明确不在保护范围"一节：
+allowed_rw:
+  - qa/runs          # 执行产物；门禁只认 CI 重新生成的版本
+  - qa/cases         # qa-design 的正常产出
+  - qa/defects       # 缺陷草稿，提单另需显式确认
+  - .tmp-isolation-check/writable   # 仅供 verify-isolation.sh 的阳性对照使用
+
+# 受保护路径：即便被误写进 allowed_rw 也必须拒绝（双重否决）。
+# 与 docs/protected-paths.md 的受保护清单对齐；父目录同样拒绝，
+# 因为把 qa/ 挂成可写等于把 qa/baseline 一起挂成可写。
+protected:
+  - qa/baseline
+  - qa/plan
+  - qa/metrics
+  - scripts
+  - isolation
+  - tests
+  - .github
+  - .doc
+  - docs
+  - evals
+  - steering
+  - templates
+  - CODEOWNERS
+  - Makefile
+  - VERSION
+
+image:
+  reference: localhost/qa-executor:0.1.0
+  # 不可变标识。verify-isolation.sh 在跑任何检查之前先核对本机镜像的 digest 是否等于
+  # 这个值：不核对的话，验证结果描述的可能是另一个镜像。
+  # 重建镜像后必须同步更新：
+  #   podman image inspect localhost/qa-executor:0.1.0 --format '{{.Digest}}'
+  digest: sha256:d14c95bf18260f1cf7e1b9cf0fbb97c9a48001f29eb68dc2f60e90d766cbaf45
+  # 调用方能否用 QA_ISOLATION_IMAGE 换镜像。false = 换了就拒绝执行。
+  allow_override: false
+
+network:
+  mode: none

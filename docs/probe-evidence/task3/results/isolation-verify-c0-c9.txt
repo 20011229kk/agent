@@ -1,0 +1,128 @@
+=== 隔离验证 2026-09-21T12:07:22+0800 ===
+repo:   /Users/AI/test-agent
+image:  localhost/qa-executor:0.1.0（取自 isolation/mount-policy.yaml，不由调用方指定）
+canary before:  36b5ee47936393d01d5cf8cdbd6c2e23e7b6eb901cedc6aa5047bf19e476441a
+VERSION before: e9dd8507f4bf0c6f42458e41aea833ad0bd3f6127272335eee9bf4d58541ed67
+--- 策略与代码 manifest（供 CI 核对跑的是不是这套规则）---
+{
+  "repo_root": "/Users/AI/test-agent",
+  "sha256": {
+    "isolation/mount-policy.yaml": "89e59e64ea36b1b95bece681d491219cbd1d6e6912f0a2860a33f664a2e80e9d",
+    "isolation/mount_policy.py": "592de904d63bce243aed16444277fa35326d7e9c8e63d0270998c86570bb8d41",
+    "isolation/run-isolated.sh": "6860ff30f94d1285618dabd8a020a70f70a7d5b5f2422bb4f396dc8042950a24",
+    "isolation/Containerfile": "3bbe96f94bcf2c8e48639fab50b40f779e57e3200a3e28ceeb163e39752fc05a"
+  }
+}
+
+--- C0 镜像身份核对：本机镜像 digest 必须等于策略记录值 ---
+policy digest: sha256:d14c95bf18260f1cf7e1b9cf0fbb97c9a48001f29eb68dc2f60e90d766cbaf45
+actual digest: sha256:d14c95bf18260f1cf7e1b9cf0fbb97c9a48001f29eb68dc2f60e90d766cbaf45
+C0: PASS
+
+--- C1 阳性对照：策略白名单内的可写挂载应当写入成功 ---
+inner_rc=0
+runner_rc=0
+C1 宿主机可见: d8bf5f8b0b421b1bfb447fa96ca2420cc7b6d2106f21dbd9c73492b8114807fa
+C1 内容: WRITTEN-INSIDE-CONTAINER
+C1: PASS（挂载链路通，测量手段有效）
+
+--- C2 只读挂载内写入应当被拒绝（需同时拿到拒绝原文） ---
+inner_rc=2
+sh: 1: cannot create /work/.tmp-isolation-check/protected/canary.txt: Read-only file system
+runner_rc=0
+canary after: 36b5ee47936393d01d5cf8cdbd6c2e23e7b6eb901cedc6aa5047bf19e476441a
+C2: PASS（哈希未变 + 拿到 Read-only file system 拒绝原文）
+
+--- C3 未挂载的宿主机路径在容器内不存在 ---
+ls: cannot access '/Users': No such file or directory
+inner_rc=2
+runner_rc=0
+C3: PASS（靠不存在，不靠权限判定）
+
+--- C4 网络隔离：结构性证据 + errno 限定 + 同端点可达性阳性对照 ---
+C4b 阳性对照（**故意绕开包装器**，同一镜像，默认网络）:
+  尝试 223.5.5.5:443 -> REACHABLE
+  选定端点: 223.5.5.5:443
+{
+  "interfaces": [
+    "eth0",
+    "lo"
+  ],
+  "only_loopback": false,
+  "connect": {
+    "host": "223.5.5.5",
+    "port": 443,
+    "timeout_s": 5.0,
+    "ok": true,
+    "errno": null,
+    "errno_name": null,
+    "exception": null
+  },
+  "verdict": "REACHABLE"
+}
+C4a 隔离态（策略 network.mode=none，同一端点 223.5.5.5:443）:
+{
+  "interfaces": [
+    "lo"
+  ],
+  "only_loopback": true,
+  "connect": {
+    "host": "223.5.5.5",
+    "port": 443,
+    "timeout_s": 3.0,
+    "ok": false,
+    "errno": 101,
+    "errno_name": "ENETUNREACH",
+    "exception": "OSError",
+    "message": "[Errno 101] Network is unreachable"
+  },
+  "verdict": "UNREACHABLE"
+}
+runner_rc=0
+C4 判定依据: PASS 仅 lo 接口 + errno 101(ENETUNREACH) + 同端点 223.5.5.5:443 阳性对照可连通
+C4: PASS
+
+--- C5 仓库根整体只读（不止显式受保护目录） ---
+inner_rc=2
+sh: 1: cannot create /work/VERSION: Read-only file system
+runner_rc=0
+VERSION after: e9dd8507f4bf0c6f42458e41aea833ad0bd3f6127272335eee9bf4d58541ed67
+C5: PASS（哈希未变 + 拒绝原文）
+
+=== 以下为外部复核实测出的真实绕过，必须被策略拒绝（回归场景）===
+--- C6 回归 R1：--rw qa/baseline 重新挂载受保护目录 ---
+REJECTED: PROTECTED_PATH 'qa/baseline' —— 位于受保护路径之内（受保护项: qa/baseline）
+共 1 条请求被拒绝，未生成任何挂载参数。
+FATAL: 挂载策略校验未通过，未启动容器
+runner_rc=65
+C6: PASS（退出 65 + PROTECTED_PATH 拒绝原文 + 容器未启动）
+
+--- C7 回归 R2：--rw ../outside 父目录穿越 ---
+REJECTED: OUTSIDE_REPO '../outside' —— 规范化后落在仓库之外: /Users/AI/outside
+共 1 条请求被拒绝，未生成任何挂载参数。
+FATAL: 挂载策略校验未通过，未启动容器
+runner_rc=65
+C7: PASS（退出 65 + OUTSIDE_REPO 拒绝原文 + 容器未启动）
+
+--- C8 镜像覆盖应被策略拒绝 ---
+REJECTED: IMAGE_OVERRIDE_DENIED 'docker.io/library/alpine:3.20' —— 策略不允许覆盖镜像：请求 'docker.io/library/alpine:3.20'，策略 'localhost/qa-executor:0.1.0'
+共 1 条请求被拒绝，未生成任何挂载参数。
+FATAL: 挂载策略校验未通过，未启动容器
+runner_rc=65
+C8: PASS
+
+--- C9 仓库根覆盖应被拒绝（否则受保护清单整体失效） ---
+FATAL: 不接受 QA_ISOLATION_REPO 覆盖仓库根（请求 /tmp，实际 /Users/AI/test-agent）
+runner_rc=78
+C9: PASS
+
+=== 总判定 ===
+VERDICT: PASS（C0–C9 共 10 项，含镜像身份核对、阳性对照与两条回归反例）
+
+作用域与残余风险（不要省略）：
+1. 只覆盖**通过本包装器发起**的 shell 写入。工具级 fs_write 由 IDE 宿主进程执行，
+   不经过这里（item 8），需单独闭环。
+2. **没有机制强制必须走本包装器**；直接在宿主机执行命令依然可行。
+3. 策略文件与校验器都在仓库里，对宿主机有写权限的 agent 可以改掉它们。
+   这是护栏，不是安全边界；强制点仍是受保护分支 + CODEOWNERS + CI 复核。
+=== 结束 ===

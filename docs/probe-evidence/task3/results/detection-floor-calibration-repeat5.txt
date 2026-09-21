@@ -1,0 +1,72 @@
+sampler pid 82379, interval 0.10s, stops after 300s or on STOP file
+marked canary-1s-x5
+marked canary-0.3s-x5
+marked canary-0.15s-x5
+marked canary-0.1s-x5
+marked canary-0.05s-x5
+marked canary-0.02s-x5
+stop requested
+### 设定间隔: 0.1s   每种寿命重复: 5 次
+--- 实际采样间隔（秒）---
+min=0.095  p50=0.100  p95=0.103  max=0.104  mean=0.100
+注意：能被可靠观测的进程寿命下限由 **max 间隙** 决定，不是由设定间隔决定；短于 max 间隙的进程可能整段落在两次快照之间。
+--- marks ---
+12:49:17  canary-1s-x5
+12:49:22  canary-0.3s-x5
+12:49:24  canary-0.15s-x5
+12:49:24  canary-0.1s-x5
+12:49:25  canary-0.05s-x5
+12:49:25  canary-0.02s-x5
+--- excluded 116 sampler-owned /bin/ps children (ppid=82379) ---
+--- processes created during the window: 35 ---
+t=   0.90s 12:49:16  pid=82393 ppid=3612 (/Applications/Kiro.app/Contents/Frameworks/Kiro Helper.app/Contents/MacOS/Kiro Helper)  (ps)
+t=   2.00s 12:49:17  pid=82407 ppid=82372 (zsh)  (Python)
+t=   2.10s 12:49:17  pid=82410 ppid=82372 (zsh)  sleep
+t=   2.20s 12:49:17  pid=82413 ppid=1 (/sbin/launchd)  /System/Library/PrivateFrameworks/UniversalAccess.framework/Versions/A/Resources/AXVisualSupportAgent.app/Contents/MacOS/AXVisualSupportAgent
+t=   2.80s 12:49:18  pid=82423 ppid=5463 (/Applications/Podman Desktop.app/Contents/MacOS/Podman Desktop)  (podman-remote)
+t=   3.10s 12:49:18  pid=82439 ppid=82372 (zsh)  sleep
+t=   4.11s 12:49:19  pid=82452 ppid=82372 (zsh)  sleep
+t=   5.10s 12:49:20  pid=82473 ppid=82372 (zsh)  sleep
+t=   5.91s 12:49:21  pid=82485 ppid=3612 (/Applications/Kiro.app/Contents/Frameworks/Kiro Helper.app/Contents/MacOS/Kiro Helper)  (ps)
+t=   6.10s 12:49:21  pid=82488 ppid=82372 (zsh)  sleep
+t=   7.10s 12:49:22  pid=82501 ppid=82372 (zsh)  (Python)
+t=   7.21s 12:49:22  pid=82504 ppid=82372 (zsh)  (sleep)
+t=   7.50s 12:49:22  pid=82508 ppid=82372 (zsh)  (sleep)
+t=   7.80s 12:49:23  pid=82514 ppid=82372 (zsh)  sleep
+t=   8.00s 12:49:23  pid=82536 ppid=5463 (/Applications/Podman Desktop.app/Contents/MacOS/Podman Desktop)  (podman-remote)
+t=   8.10s 12:49:23  pid=82538 ppid=82372 (zsh)  sleep
+t=   8.40s 12:49:23  pid=82542 ppid=82372 (zsh)  sleep
+t=   8.70s 12:49:24  pid=82550 ppid=82372 (zsh)  sleep
+t=   8.90s 12:49:24  pid=82553 ppid=82372 (zsh)  sleep
+t=   9.00s 12:49:24  pid=82555 ppid=82372 (zsh)  sleep
+t=   9.21s 12:49:24  pid=82558 ppid=82372 (zsh)  (sleep)
+t=   9.40s 12:49:24  pid=82561 ppid=82372 (zsh)  sleep
+t=   9.51s 12:49:24  pid=82573 ppid=82372 (zsh)  (Python)
+t=   9.60s 12:49:25  pid=82576 ppid=82372 (zsh)  (sleep)
+t=   9.70s 12:49:25  pid=82578 ppid=82372 (zsh)  sleep
+t=   9.80s 12:49:25  pid=82580 ppid=82372 (zsh)  sleep
+t=   9.90s 12:49:25  pid=82582 ppid=82372 (zsh)  sleep
+t=  10.00s 12:49:25  pid=82584 ppid=82372 (zsh)  sleep
+t=  10.11s 12:49:25  pid=82588 ppid=82372 (zsh)  sleep
+t=  10.21s 12:49:25  pid=82590 ppid=82372 (zsh)  (sleep)
+t=  10.30s 12:49:25  pid=82593 ppid=82372 (zsh)  sleep
+t=  10.40s 12:49:25  pid=82596 ppid=82372 (zsh)  /Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python
+t=  10.51s 12:49:25  pid=82603 ppid=82372 (zsh)  (sleep)
+t=  10.60s 12:49:26  pid=82607 ppid=82372 (zsh)  sleep
+t=  11.61s 12:49:27  pid=82620 ppid=82372 (zsh)  (Python)
+--- baseline processes that exited during the window: 4 ---
+pid=77864 /System/Library/PrivateFrameworks/AOSKit.framework/Versions/A/XPCServices/com.apple.iCloudHelper.xpc/Contents/MacOS/com.apple.iCloudHelper
+pid=81920 /System/Library/PrivateFrameworks/UniversalAccess.framework/Versions/A/Resources/AXVisualSupportAgent.app/Contents/MacOS/AXVisualSupportAgent
+pid=82381 /bin/ps
+pid=82380 sleep
+寿命 1s: 捕获 5/5（漏 0）  pids=82410 82439 82452 82473 82488
+寿命 0.3s: 捕获 5/5（漏 0）  pids=82504 82508 82514 82538 82542
+寿命 0.15s: 捕获 5/5（漏 0）  pids=82550 82553 82555 82558 82561
+寿命 0.1s: 捕获 5/5（漏 0）  pids=82576 82578 82580 82582 82584
+寿命 0.05s: 捕获 3/5（漏 2）  pids=82588 82590 82592 82593 82595
+寿命 0.02s: 捕获 1/5（漏 4）  pids=82599 82602 82603 82605 82606
+### 判读方式
+捕获率 < 5/5 的最长寿命，就是本次测量**已证实会漏**的量级；
+只有捕获率达到 5/5 的寿命才可以说'该量级能被观测到'，
+且该结论仅适用于本次的实测间隔分布（见上方 max 间隙）。
+CALIB_RC=0

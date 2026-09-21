@@ -1,0 +1,29 @@
+{
+  "reduced_at": "2026-09-21T13:35:59+0800",
+  "source_dir": "/tmp/kiro-proc-calib2",
+  "samples": 117,
+  "mean_procs_per_sample": 528.7,
+  "full_samples_jsonl": {
+    "sha256": "a834c4647ad81185f35c75067034da52862cf96f80bcc5c7cb37869a0e997e5b",
+    "bytes": 10148142,
+    "note": "完整快照未入库（体积过大）；需要时用本哈希与本地留存件比对"
+  },
+  "samples_reduced_jsonl": {
+    "sha256": "97bb992fc4c8fbac8cfc34898cfb5ae874e43975646137dfddf418309b62c28b",
+    "bytes": 403033
+  },
+  "retained_fields": [
+    "i",
+    "t",
+    "wall",
+    "n_procs",
+    "procs_sha256",
+    "kiro_tree{ppid,lstart,comm_id}"
+  ],
+  "comm_table": {
+    "file": "comm-table.json",
+    "entries": 17,
+    "note": "comm_id → 完整命令行原文，内容未截断"
+  },
+  "dropped": "非 Kiro 进程子树的逐进程明细（其存在性由 n_procs 与 procs_sha256 约束）"
+}

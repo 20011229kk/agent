@@ -4,23 +4,45 @@
 # 所以测试依赖必须在构建阶段装好并锁死版本；否则"执行期联网装依赖"会把刚刚
 # 关掉的那条外网通道又打开。
 #
-# 版本锁定理由：与宿主机现有工具链对齐（系统 python3 为 3.9.6 + pytest 8.4.2），
-# 避免容器内外测试行为不一致造成的假绿/假红。
-#
 # 构建（需要外网，属于构建期而非执行期）：
-#   podman build --platform linux/arm64 -t qa-executor:0.1.0 -f isolation/Containerfile .
+#   podman build -t qa-executor:0.1.0 -f isolation/Containerfile .
+#   # 构建后把新镜像 digest 写回策略，供 verify-isolation.sh 核对身份：
+#   podman image inspect localhost/qa-executor:0.1.0 --format '{{.Digest}}'
 #
-# 注意 platform：宿主是 arm64，本机现存的 python:3.12-slim 是 amd64，
-# 用它跑会走模拟层（podman 会打印 platform 不匹配的 WARNING），慢且行为可能有差异。
+# ---------------------------------------------------------------------------
+# 可重复性：**已锁到什么程度，别说过头**
+# ---------------------------------------------------------------------------
+# 上一版注释写的是"依赖锁死"，外部复核指出这个说法超出事实：当时 FROM 用的是可变标签
+# `python:3.12-slim`，传递依赖也没写版本。现在的实际状态是：
+#
+# 已锁：
+#   - 基础镜像按 **manifest digest** 固定（不是可变标签）
+#   - 直接依赖 pip / pytest / PyYAML 固定版本
+#   - 上述包的传递依赖（pluggy / iniconfig / packaging / pygments）固定版本
+# 未锁（已知缺口，不要当成已解决）：
+#   - 没有使用 `--require-hashes`，包内容未做哈希校验，只锁了版本号
+#   - 基础镜像内的 Debian 系统包随该 digest 固定，但未单独审计
+#   - digest 是 arm64 平台的镜像清单摘要；换平台需要重新取 digest 并重跑验证
+#
+# 基础镜像 digest 对应 docker.io/library/python:3.12-slim（arm64），
+# 取自构建当时 `podman image inspect ... {{index .RepoDigests 0}}`。
+FROM docker.io/library/python@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9
 
-FROM docker.io/library/python:3.12-slim
-
-# pip 自身也锁版本，避免构建结果随时间漂移
+# pip 自身也锁版本，避免构建结果随时间漂移。
+# 传递依赖显式列出：只写 pytest==8.4.2 的话，pluggy 之类仍会取当时最新版，
+# 同一份 Containerfile 在不同日期会装出不同内容。
 RUN python -m pip install --no-cache-dir --upgrade "pip==25.2" \
- && python -m pip install --no-cache-dir "pytest==8.4.2" "PyYAML==6.0.2"
+ && python -m pip install --no-cache-dir \
+      "pytest==8.4.2" \
+      "PyYAML==6.0.2" \
+      "pluggy==1.6.0" \
+      "iniconfig==2.3.0" \
+      "packaging==26.3" \
+      "pygments==2.21.0" \
+ && python -m pip check
 
 # 不装 git / curl / sudo：执行期不需要，装了只会扩大边界
-# 不设 USER root 之外的用户：宿主机挂载的属主是调用者，改 UID 会导致可写挂载写不进去
+# 不改 USER：宿主机挂载的属主是调用者，改 UID 会导致可写挂载写不进去
 #   （若后续改为 --userns=keep-id 方案，这里要同步调整并重跑 verify-isolation.sh）
 
 WORKDIR /work

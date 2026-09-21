@@ -1,0 +1,12 @@
+{
+  "started_at": "2026-09-21T12:51:07+0800",
+  "interval_s": 0.1,
+  "max_seconds": 300.0,
+  "ps_args": [
+    "/bin/ps",
+    "-Ao",
+    "pid=,ppid=,user=,lstart=,command="
+  ],
+  "with_args": true,
+  "sampler_pid": 83524
+}

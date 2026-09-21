@@ -1,0 +1,29 @@
+{
+  "reduced_at": "2026-09-21T13:35:59+0800",
+  "source_dir": "/tmp/kiro-proc-pass3",
+  "samples": 866,
+  "mean_procs_per_sample": 573.1,
+  "full_samples_jsonl": {
+    "sha256": "ebb55327929522cb37a132283a4f5fb121ae7423bb57317abfb497a382f47c0c",
+    "bytes": 148028434,
+    "note": "完整快照未入库（体积过大）；需要时用本哈希与本地留存件比对"
+  },
+  "samples_reduced_jsonl": {
+    "sha256": "235950aed4d94166c5fcb6d21a39211e0c566c4e804fc0979ffc47a4035a3fe0",
+    "bytes": 2980214
+  },
+  "retained_fields": [
+    "i",
+    "t",
+    "wall",
+    "n_procs",
+    "procs_sha256",
+    "kiro_tree{ppid,lstart,comm_id}"
+  ],
+  "comm_table": {
+    "file": "comm-table.json",
+    "entries": 28,
+    "note": "comm_id → 完整命令行原文，内容未截断"
+  },
+  "dropped": "非 Kiro 进程子树的逐进程明细（其存在性由 n_procs 与 procs_sha256 约束）"
+}

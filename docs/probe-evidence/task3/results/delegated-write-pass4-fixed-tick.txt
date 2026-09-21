@@ -1,0 +1,40 @@
+pass 4（2026-09-21）：用修正后的采样器重跑委派写入观测。
+
+为什么要重跑：pass 2 的"0.1s 间隔"是设定值。外部复核用 148 次 / 22.1 秒反推出实际约
+150ms，并指出采样器把 ps 调用与写盘时间叠加在间隔之外。修正后按固定节拍对齐，
+本轮实测间隔与设定值一致。
+
+原始采样（降采样归档，可逐间隙复核）：reduced-pass4-fixed-tick/
+完整 samples.jsonl 未入库：38372478 bytes，sha256=8cd40532ec03cadb...（见 reduced-manifest.json）
+
+--- window ---
+samples: 248  span: 24.7s  (13:36:12 .. 13:36:37)
+--- 实际采样间隔（秒）---
+min=0.095  p50=0.100  p95=0.105  max=0.105  mean=0.100
+--- marks ---
+13:36:12  t0-before-delegation
+13:36:37  after-delegated-write
+--- 排除 247 个采样器自身的 /bin/ps 子进程（ppid=977）---
+
+窗口内新建进程 10 个，其中与 Kiro 有父子关系的只有 1 个：
+
+  t=0.91s  pid=1011  ppid=3612 (Kiro Helper, node.mojom.NodeService)  comm=(sh)
+
+该 `sh` 出现在 t=0.91s，正是本探针自己执行 `mark` shell 命令的时刻（宿主 shell 是
+Kiro Helper 3612 的后代，已在 kiro-process-tree.txt 中记录）。**归因于测量自身，
+不是委派写入路径。** 委派回合期间（约 t=5s–24s）Kiro 树内没有新建进程。
+
+其余 9 个新建进程：Podman Desktop 的 podman-remote ×4、launchd 的
+AXVisualSupportAgent / chrome_crashpad ×3、探针自身的 Python / sleep ×2，
+与 Kiro 无父子关系。
+
+结论（严格限定）：
+1. 本轮 248 次快照（实测相邻间隔 max 0.105s）中，委派写入期间**没有记录到** Kiro 树
+   中的新建进程。
+2. 这**不是** PID 归属：采样器只观察进程创建。写入完全可能由采样开始前就存在的常驻
+   进程完成，其身份未确定。
+3. 因此不得据此推出"不存在 per-agent 进程边界""委派链内部拆分不可能""顶层会话就是
+   独立进程"等架构结论。需要的是内核级追踪的正面归属证据（见 task3-findings.md 第 5 节）。
+4. 短于 0.105s 的进程可能整段落在两次快照之间；检测下限见
+   detection-floor-calibration-repeat5.txt（1s/0.3s/0.15s/0.1s 均 5/5，
+   0.05s 为 3/5，0.02s 为 1/5）。

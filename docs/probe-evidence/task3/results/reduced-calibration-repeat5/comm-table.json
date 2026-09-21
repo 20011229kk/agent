@@ -1,0 +1,19 @@
+{
+  "c0eae54248d9": "/Applications/Kiro.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler",
+  "079cd6c9721b": "zsh (kiro-cli-term)",
+  "b663616e0c19": "/bin/zsh",
+  "85b42e170287": "pi",
+  "1e7791cfcfe7": "/Applications/Kiro.app/Contents/MacOS/Kiro",
+  "1231b366233e": "/Applications/Kiro.app/Contents/Frameworks/Kiro Helper.app/Contents/MacOS/Kiro Helper",
+  "edc5e037dd4f": "/Applications/Kiro.app/Contents/Frameworks/Kiro Helper (Renderer).app/Contents/MacOS/Kiro Helper (Renderer)",
+  "1e4097d6fa64": "/Applications/Kiro.app/Contents/Frameworks/Kiro Helper (Plugin).app/Contents/MacOS/Kiro Helper (Plugin)",
+  "9225e0956e17": "/Users/kk/.pyenv/versions/3.13.12/bin/python",
+  "c34f5e622df8": "/Applications/Kiro CLI.app/Contents/MacOS/kiro_cli_desktop",
+  "6fe10181485f": "/Applications/Kiro CLI.app/Contents/Helpers/CodeWhispererInputMethod.app/Contents/MacOS/fig_input_method",
+  "a26e37654285": "zsh",
+  "0afa5bb5d5f1": "sleep",
+  "235be290ab23": "(ps)",
+  "efc7749dfc5f": "(Python)",
+  "8fb0bf720206": "(sleep)",
+  "c338c23c0920": "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python"
+}

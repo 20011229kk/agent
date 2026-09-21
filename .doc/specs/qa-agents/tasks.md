@@ -162,39 +162,57 @@
 
 ### [!] Task 3 — 权限规则与执行隔离
 
-**阻塞原因（2026-09-20 复审后更正，2026-09-21 进程边界已定位）：** item 7/12 已验证且
-原设计基本成立（item 12 的 `spec`/`context` 部分未能验证）；item 8 是新发现，但**不是**
-"执行环境隔离对付不了委派"——需要先定位实际执行 `fs_write` 的进程边界。该定位已完成：
-委派写入期间不出现存活 ≳100ms 的新进程，**IDE 内没有 per-agent 进程边界**，因此
-"拆分为独立执行单元"不能在委派链内部实现，只能发生在进入 IDE 之前（独立会话/独立运行器）。
-这仍是重新划定隔离粒度，不是宣布隔离本身失效：shell 起源写入（item 5）可被容器拦截。
+**状态（2026-09-21 外部复核后更新）：仍阻塞，但阻塞点变了。**
+
+shell 侧（item 5）的挂载边界已落地并通过 C0–C9 十项验证，包括外部复核实测出的两条绕过
+被拒绝，这部分可用。仍阻塞的是**"强制"与"归属"**两件事：没有机制强制必须走包装器；
+策略与校验器本身在仓库里可被改写；写入的权威 PID 归属未取得。
+
+进程观测的结论已收窄为"本轮快照没有记录到新建进程"，**不再**声称"IDE 内没有 per-agent
+进程边界"，相关架构推论已撤回——采样器不做 PID 归属，没有新进程也可能由常驻进程写入。
+item 8（工具级委派写入）仍未闭环，且不能由 shell 包装器代替。
 
 - [ ] 按实测写 `permissions.rules`；`qa-lead` 用 tools 省略而非 deny；配置**始终带
   `permissions` 块**（即便为空规则），否则被 IDE 静默跳过（本轮新发现）
 - [ ] `qa-executor` 写路径显式 allow（headless/子代理下 ask 等同 deny）
-- [x] **先定位实际执行 `fs_write` 与相关执行服务的进程边界** — 2026-09-21 完成，
-  证据与脚本见 `docs/probe-evidence/task3/task3-findings.md` 及 `task3/results/`：
-  - shell 命令是 `Kiro Helper`(3612) → `Kiro`(3590) 的后代进程，宿主机上无隔离
-  - 委派子代理 `fs_write` 期间 Kiro 进程树内**无存活 ≳100ms 的新进程**（0.1s×148 采样）
-  - 检测下限已标定（100ms 可检出 / 20ms 漏检），正对照先通过再采信否定结论
-  - 结论：**IDE 内不存在 per-agent 进程边界**，拆分执行单元只能发生在进入 IDE 之前
+- [~] **进程边界观测：部分完成（2026-09-21 外部复核后从"已完成"降级）**
+  证据与适用范围见 `docs/probe-evidence/task3/task3-findings.md` 及 `task3/results/`：
+  - [x] shell 命令的进程归属：`Kiro Helper`(3612) → `Kiro`(3590) 的后代进程，宿主机无隔离
+  - [x] 委派写入期间的进程创建观测（pass 4，实测间隔 max 0.105s，248 次快照）：
+        **没有记录到** Kiro 树中的新建进程（唯一 `sh` 与探针自身 shell 命令同时刻）
+  - [x] 检测下限按每寿命重复 5 次标定：1s/300ms/150ms/100ms 均 5/5，**50ms 3/5、20ms 1/5**
+  - [x] 原始采样降采样归档入库（保留每次快照 t/wall、Kiro 子树、整表 sha256、命令行字典表），
+        完整文件哈希记录在 `reduced-manifest.json`
+  - [ ] **写入的权威 PID 归属未取得** —— 采样器只观察进程创建，不做归属；没有新进程仍
+        可能由采样前已存在的常驻进程完成写入。需内核级追踪（`sudo fs_usage`，覆盖直接与
+        委派两条链路、唯一 canary、记录 open/write/rename 事件）
+  - [x] 已撤回三条超出证据的推论："不存在 per-agent 进程边界""委派链内部拆分不可能"
+        "顶层会话即独立 OS 进程"
   - 附带记录：首版 FIFO+`lsof` 定位 PID 的方法被对照组证伪（阻塞在 `open()` 时无 fd）
-- [x] 据上述边界设计隔离方案并落地（两条路径分开处理）— 2026-09-21：
-  - item 5（shell 起源写入）：`isolation/Containerfile`（锁 `pytest==8.4.2`/`PyYAML==6.0.2`）、
-    `isolation/run-isolated.sh`（仓库 `:ro` + 显式 `--rw` + `--network=none`）、
-    `isolation/verify-isolation.sh`（5 条检查，每条三段证据）
-  - 验证：**5/5 PASS 含阳性对照**；容器内跑完仓库全量测试 **234 项通过**
-    （证据 `docs/probe-evidence/task3/results/isolation-verify-arm64.txt`、
-    `isolation-pytest-in-container.txt`、`isolation-image-build.txt`）
-  - item 8（工具级委派写入）：发生在 IDE 宿主进程内，宿主整体沙箱化在 macOS 上**未能
-    验证**（勿记为"不可行"）；可落地缓解是结构性的——安全关键角色以顶层会话直接调用，
-    不经委派
-- [ ] **隔离的强制点尚未闭环**：现有验证只证明"通过包装器执行时边界成立"，没有机制强制
-  `qa-executor` 必须走包装器。候选方案是把该角色 shell allow 清单收窄到只有
-  `isolation/run-isolated.sh`（命令层规则生效已由 item 6 验证），但 `bash -c` 与变量间接
-  会进入 `ask` —— 需实测确认在子代理/headless 下确实等同 deny，不得假设
-- [ ] 取得写入操作的权威 PID 归属（需用户执行一条 `sudo fs_usage`，见 findings 第 5 节），
-  把"≳100ms 精度下无 per-agent 进程"升级为对具体进程的正面认定
+- [x] item 5（shell 起源写入）隔离落地并验证 — 2026-09-21，两轮：
+  - `isolation/mount-policy.yaml` + `mount_policy.py`：**可写范围由策略决定，不由调用参数
+    决定**；`allowed_rw` 白名单 + `protected` 双重否决 + 镜像 digest + `network.mode`
+  - `isolation/run-isolated.sh` 自己不拼挂载参数；拒绝 `QA_ISOLATION_REPO`/镜像覆盖
+  - `isolation/verify-isolation.sh`：**C0–C9 全 PASS**，含镜像身份核对、阳性对照、
+    两条绕过回归（C6 `--rw qa/baseline` / C7 `--rw ../outside`）
+  - 容器内跑完仓库全量测试 **292 项通过**；`isolation/` 自身 58 项单测
+  - 证据：`isolation-verify-c0-c9.txt`、`isolation-pytest-in-container.txt`、
+    `isolation-image-build.txt`
+- [x] 修复外部复核发现的包装器扩权漏洞（P1）：原实现接受任意 `--rw`，实测两条绕过成功
+  （重新挂载受保护目录、父目录穿越）。已固化为 C6/C7 + `tests/test_mount_policy.py` 回归
+- [x] 修复 C4 网络假通过（P2）：原判据捕获所有 `OSError`，离线故障注入证明
+  `ConnectionRefused`/`Timeout` 同样命中 PASS。现为结构性证据 + errno 限定 + 同端点阳性对照
+- [x] 修复默认镜像未接上（P2）：默认曾是 `python:3.12-slim`，默认镜像里 `import pytest` 报
+  `ModuleNotFoundError`；现默认取策略镜像并默认拒绝覆盖
+- [ ] **隔离的强制点尚未闭环（两层都没闭）**：
+  - 没有机制强制 `qa-executor` 必须走包装器。候选方案是把该角色 shell allow 收窄到只有
+    `isolation/run-isolated.sh`，但 `bash -c` 与变量间接会进入 `ask` —— 需实测确认在
+    子代理/headless 下确实等同 deny，不得假设
+  - 策略与校验器都在仓库里，对宿主机有写权限的 agent 可以改掉它们。这是护栏不是边界；
+    强制点仍是受保护分支 + CODEOWNERS + CI 复核（可用 `verify-isolation.sh` 打印的
+    sha256 manifest 核对）
+- [ ] item 8（工具级委派写入）单独闭环：宿主整体沙箱化在 macOS 上**未能验证**
+  （勿记为"不可行"）；**不得由 shell 包装器代替**
 - [ ] 隔离方案落地后**重跑 item 5 与 item 8 的完整链路**，验证之前观测到的绕过是否
   真的被堵住；只补设计说明不算通过
 - [ ] `qa-lead` 委派 `qa-executor` 的一次性审批如何处理需单独设计——委派会触发审批
