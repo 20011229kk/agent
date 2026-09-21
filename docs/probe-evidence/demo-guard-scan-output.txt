@@ -1,0 +1,26 @@
+=== guard_scan（质量门槛变化提示） ===
+扫描文件 7 个；提示 7 条（未豁免 7 条）
+  [OPEN] ASSERTION_REMOVED · tests/test_register.py
+        断言行减少（删除 2 条，新增 0 条）—— 需说明是等价替换还是覆盖下降。注意：本工具只数行数，不判断语义强弱
+        证据: assert_removed=2 assert_added=0
+  [OPEN] SKIP_ADDED · tests/test_concurrent.py
+        新增跳过标记（pytest xfail）—— 需说明原因与替代覆盖
+        证据: @pytest.mark.xfail(reason="偶发失败，先放过")
+  [OPEN] THRESHOLD_CHANGED · setup.cfg
+        阈值 fail_under 由 85.0 改为 40.0（放宽） —— 需说明依据
+        证据: fail_under: 85.0 -> 40.0
+  [OPEN] RETRY_POLICY_CHANGED · pytest.ini
+        新增重试相关配置 reruns=3.0 —— 重试策略变更属需审查的质量规则变化
+        证据: reruns=3.0
+  [OPEN] RETRY_POLICY_CHANGED · qa/plan/login/required-scope.yaml
+        触及重试/间歇失败相关配置 —— 属需审查的质量规则变化
+        证据: accept_last_pass_without_explanation: true
+  [OPEN] PROTECTED_PATH_TOUCHED · qa/plan/login/required-scope.yaml
+        候选变更触及受保护路径（qa/plan/）—— 需 CODEOWNERS 审批；门禁规则的参照版本取自 target_sha，本次修改不对自身生效
+        证据: protected prefix: qa/plan/
+  [OPEN] TEST_FILE_DELETED · tests/test_login_dup.py
+        测试文件被删除 —— 需说明是重复项清理还是覆盖下降，并提供替代覆盖证据
+        证据: file deleted
+
+声明: 提示，非结论。本工具不能判断断言语义是否被削弱、数据清理是否有效、测试是否真的验证了它声称验证的行为。命中项需人工确认说明与替代覆盖。
+EXIT=0

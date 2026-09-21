@@ -1,0 +1,16 @@
+BASELINE: rc=0 ['45 passed in 0.21s']
+
+=== 变异检验结果 ===
+[CAUGHT] 证据缺失时把 automated 当成 False（而不是 unknown）
+        1 failed, 6 passed in 0.08s
+[CAUGHT] 把 manual 用例算进可自动化分母
+        1 failed, 8 passed in 0.09s
+[CAUGHT] 参数化/多对多：失败不再登记（任一通过即算通过）
+        1 failed, 17 passed in 0.12s
+[CAUGHT] 覆盖率分母改成用例数（而非基线条数）—— 制造假全覆盖
+        1 failed, 2 passed in 0.07s
+[CAUGHT] 去掉手工必测项的证据检查
+        1 failed, 10 passed in 0.10s
+
+恢复校验: OK
+总判定: ALL_MUTATIONS_CAUGHT

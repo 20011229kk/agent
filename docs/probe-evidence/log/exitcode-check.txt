@@ -1,0 +1,4 @@
+--- exitcode capture check ---
+true -> 0
+false -> 1
+exit7 -> 7

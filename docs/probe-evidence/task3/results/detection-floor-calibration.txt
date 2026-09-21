@@ -1,0 +1,16 @@
+sampler pid 39641, interval 0.10s, stops after 60s or on STOP file
+marked canary-1000ms
+marked canary-300ms
+marked canary-100ms
+marked canary-20ms
+stop requested
+### interval under test: 0.1s
+=== canary 1000ms (pid 39684) ===
+CONTROL_PASS: expected pid 39684 captured as created (comm=sleep)
+=== canary 300ms (pid 39696) ===
+CONTROL_PASS: expected pid 39696 captured as created (comm=sleep)
+=== canary 100ms (pid 39702) ===
+CONTROL_PASS: expected pid 39702 captured as created (comm=sleep)
+=== canary 20ms (pid 39705) ===
+CONTROL_FAIL: pid 39705 never appeared in any sample
+RC=0

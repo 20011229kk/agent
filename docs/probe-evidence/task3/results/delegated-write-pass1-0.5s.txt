@@ -1,0 +1,26 @@
+marked after-delegated-write
+stop requested
+--- window ---
+samples: 68  span: 37.5s  (11:22:08 .. 11:22:46)
+--- marks ---
+11:22:08  t0-before-direct-write
+11:22:19  after-direct-write-before-delegation
+11:22:46  after-delegated-write
+--- excluded 67 sampler-owned /bin/ps children (ppid=37828) ---
+--- processes created during the window: 8 ---
+t=   1.11s 11:22:10  pid=37851 ppid=1 (/sbin/launchd)  /System/Library/PrivateFrameworks/UniversalAccess.framework/Versions/A/Resources/AXVisualSupportAgent.app/Contents/MacOS/AXVisualSupportAgent
+t=   1.67s 11:22:10  pid=37857 ppid=69002 (launchd_sim)  /Library/Developer/CoreSimulator/Volumes/iOS_22G86/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 18.6.simruntime/Contents/Resources/RuntimeRoot/System/Library/Frameworks/ManagedAppDistribution.framework/Support/managedappdistributiond
+t=   1.67s 11:22:10  pid=37858 ppid=69002 (launchd_sim)  /usr/libexec/proactiveeventtrackerd
+t=   1.67s 11:22:10  pid=37859 ppid=69002 (launchd_sim)  /Library/Developer/CoreSimulator/Volumes/iOS_22G86/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 18.6.simruntime/Contents/Resources/RuntimeRoot/System/Library/PrivateFrameworks/FaceTimeMessageStore.framework/facetimemessagestored
+t=  18.98s 11:22:27  pid=38053 ppid=5463 (/Applications/Podman Desktop.app/Contents/MacOS/Podman Desktop)  (podman-remote)
+t=  22.90s 11:22:31  pid=38085 ppid=16031 (/Applications/ChatGPT.app/Contents/MacOS/ChatGPT)  (ps)
+t=  35.29s 11:22:44  pid=38202 ppid=3590 (/Applications/Kiro.app/Contents/MacOS/Kiro)  (Kiro)
+t=  37.52s 11:22:46  pid=38222 ppid=5004 (/bin/zsh)  sleep
+--- baseline processes that exited during the window: 6 ---
+pid=37315 /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared
+pid=37361 /System/Library/PrivateFrameworks/UniversalAccess.framework/Versions/A/Resources/AXVisualSupportAgent.app/Contents/MacOS/AXVisualSupportAgent
+pid=37691 /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared
+pid=37692 /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared
+pid=37830 /bin/ps
+pid=37829 (Python)
+REPORT_RC=0

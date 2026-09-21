@@ -1,0 +1,104 @@
+# qa-design 场景评测 rubric
+#
+# `judge` 字段是这份 rubric 的核心：
+#   structural = 可由 run_evals.py 自动判定（格式合规）
+#   human      = 必须人工判断（输出质量）
+#
+# 报告里两类结果**分列**，不合成总分。把 structural 全过写成"质量达标"是本项目
+# 明确禁止的表述 —— 格式合规只证明格式合规。
+---
+meta:
+  rubric_version: "1.0.0"
+  target_agent: qa-design
+  applies_to_requirements: [R2, R3]
+
+criteria:
+  # ---- 结构类：自动判定 ----
+  - id: S1
+    judge: structural
+    weight: blocking
+    statement: 每条用例都声明了 covers，且引用的 REQ 存在于 fixture 中
+    rationale: covers 缺失或错标会让用例进不了覆盖统计（trace_matrix 的错标/漏标）
+
+  - id: S2
+    judge: structural
+    weight: blocking
+    statement: 预期结果不含模糊词（正常显示 / 功能可用 / 体验流畅 / 符合预期 / 无异常）
+    rationale: R3 要求预期可机器校验
+
+  - id: S3
+    judge: structural
+    weight: blocking
+    statement: fixture 声明的边界值全部出现（min-1 / min / max / max+1 / 非法类型）
+    rationale: R3 对数值范围的硬要求
+
+  - id: S4
+    judge: structural
+    weight: normal
+    statement: 每条用例标注了 manual、layer、priority、method
+    rationale: manual 影响自动化分母与必测校验；method 用于复核设计方法
+
+  - id: S5
+    judge: structural
+    weight: normal
+    statement: 阻塞项数量落在 fixture expect 声明的区间内
+    rationale: 既防漏报（该阻塞不阻塞），也防过度阻塞
+
+  # ---- 质量类：必须人工判断 ----
+  - id: H1
+    judge: human
+    weight: blocking
+    statement: 预期结果**确实**可验证 —— 拿着它能写出断言，而不只是没用模糊词
+    rationale: |
+      结构检查只看词表。"返回正确的状态码"不含模糊词表里的词，但同样无法断言。
+      这条是 S2 之外的补充，S2 通过不代表 H1 通过。
+    guidance: 逐条问"我能把它写成 assert 吗"，写不出来就是不通过
+
+  - id: H2
+    judge: human
+    weight: blocking
+    statement: 对不可验证的需求标了阻塞项，且**没有**为它硬造用例
+    rationale: R2 明确禁止自行补全需求
+    guidance: |
+      看阻塞项的描述是否指向真实缺口（缺指标、缺渠道、缺判定依据），
+      而不是笼统一句"需求不清晰"。同时检查该 REQ 下有没有凭空出现的用例。
+
+  - id: H3
+    judge: human
+    weight: blocking
+    statement: 没有过度阻塞 —— 可验证的那部分正常产出了用例
+    rationale: 把整份需求一律标阻塞同样是失败，只是失败方向相反
+    guidance: 混合例（mixed-partial）专门测这条
+
+  - id: H4
+    judge: human
+    weight: normal
+    statement: P0 按风险判定，不是"每条验收标准都给一个 P0"
+    rationale: R3 明确禁止后者，那会让 P0 失去风险区分作用
+    guidance: 若 P0 数量等于 REQ 数量，重点查是否机械分配
+
+  - id: H5
+    judge: human
+    weight: normal
+    statement: 覆盖了 fixture 上下文里提示的专项维度（并发、权限、幂等、兼容）
+    rationale: R3 要求这些专项，但哪些适用需要判断
+    guidance: fixture 明确划出范围外的（如"本条不涉及"）不算漏
+
+  - id: H6
+    judge: human
+    weight: normal
+    statement: 用例之间没有实质重复（同一断言换个说法写两遍）
+    rationale: 重复用例会虚增覆盖数字
+    guidance: 看断言是否实质不同，不看措辞
+
+# ---- 漏报/误报的记账口径 ----
+# 两者代价不同，必须分开统计，不得合成一个"准确率"
+error_accounting:
+  false_negative:
+    definition: 反例 fixture 的不可验证需求**未**被标为阻塞项
+    cost: 高 —— 直接导致不可测的需求带着假用例进入下游
+    maps_to: [H2]
+  false_positive:
+    definition: 正例 fixture 的可验证需求**被**误标为阻塞项
+    cost: 中 —— 代价是人工复核，可接受但要可见
+    maps_to: [H3]

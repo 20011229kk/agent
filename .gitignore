@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+
+# 验证过程的临时输出
+.tmp-*.txt
+
+# 隔离验证的宿主机 canary（必须在 /Users 下，podman machine 只挂载 /Users）
+.tmp-isolation-check/
+
+# 运行产物：原始报告由框架/CI 写入，不入库；门禁只认 CI 重新生成的版本
+qa/runs/*/raw/
+qa/runs/*/artifacts/
+
+# 派生产物：由脚本计算，无写入者，不入库以避免手工编造
+qa/trace/*/matrix.csv
+qa/reports/*/merge-gate-report.json

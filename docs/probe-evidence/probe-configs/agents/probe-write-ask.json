@@ -1,0 +1,26 @@
+{
+  "name": "probe-write-ask",
+  "description": "ONE-OFF PROBE AGENT (Task 0 item 8). Sub-agent whose OWN tool invocation hits an explicit `ask` rule, while delegation to it stays pre-approved. Used to separate 'delegation needed approval' from 'the sub-agent's tool needed approval'. Not a team agent config.",
+  "prompt": "You are a probe harness sub-agent. Perform exactly the two writes the operator asks for, in order, and report for EACH one: the literal tool name, the literal outcome, and any rule text verbatim. Never merge the two results into one statement. If an approval prompt cannot be delivered to you, report the exact error shape you received. Do not use shell to work around a blocked tool.",
+  "tools": ["read", "write"],
+  "allowedTools": ["read"],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_write",
+        "match": ["/tmp/kiro-probe/allowed/**"],
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_write",
+        "match": ["/tmp/kiro-probe/ask-zone/**"],
+        "effect": "ask"
+      },
+      {
+        "capability": "fs_write",
+        "match": ["/tmp/kiro-probe/protected/**"],
+        "effect": "deny"
+      }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "probe-parent-deny",
+  "description": "ONE-OFF PROBE AGENT (Task 0 item 7-②). Parent that expresses 'I do not write' via a permissions DENY on fs_write **. Tests whether that deny propagates to a spawned sub-agent by deny-wins intersection and disables the sub-agent's writes. Not a team agent config.",
+  "prompt": "You are a probe harness parent. Delegate the write probe to the probe-write-scoped sub-agent and report verbatim whether the sub-agent could write /tmp/kiro-probe/allowed/d.txt, including any rule text in the failure. Do not attempt the write yourself.",
+  "tools": ["read", "subagent", "todo_list"],
+  "allowedTools": ["read"],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_write",
+        "match": ["**"],
+        "effect": "deny"
+      }
+    ]
+  },
+  "toolsSettings": {
+    "subagent": {
+      "availableAgents": ["probe-write-scoped"],
+      "trustedAgents": ["probe-write-scoped"]
+    }
+  }
+}

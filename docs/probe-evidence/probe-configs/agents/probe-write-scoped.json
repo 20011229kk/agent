@@ -1,0 +1,31 @@
+{
+  "name": "probe-write-scoped",
+  "description": "ONE-OFF PROBE AGENT (Task 0 items 3/5/6). Write+shell with an AGENT-SCOPE deny on protected/**. Used to test whether a subprocess write is subject to fs_write rules. Not a team agent config.",
+  "prompt": "You are a probe harness. Report literal tool names, literal error text, and exit codes. Never claim an operation was blocked without quoting the rule text. For subprocess probes, always run the positive control first and report both outcomes.",
+  "tools": ["read", "write", "shell"],
+  "allowedTools": ["read"],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_write",
+        "match": ["/tmp/kiro-probe/protected/**"],
+        "effect": "deny"
+      },
+      {
+        "capability": "fs_write",
+        "match": ["/tmp/kiro-probe/allowed/**", "/tmp/kiro-probe/log/**"],
+        "effect": "allow"
+      },
+      {
+        "capability": "shell",
+        "match": ["python3 *", "shasum *", "cat *", "ls *"],
+        "effect": "allow"
+      },
+      {
+        "capability": "shell",
+        "match": ["curl *", "nc *", "ssh *"],
+        "effect": "deny"
+      }
+    ]
+  }
+}

@@ -1,0 +1,193 @@
+# 合并门禁 —— 草稿，尚未生效
+#
+# ⚠ 生效前必须做三件事，缺一这份配置就只是装饰：
+#   1. 把 CODEOWNERS 里的 @qa-owners / @qa-leads 换成真实用户或团队
+#   2. 在平台上开启受保护分支，并把本 workflow 的 job 设为 required check
+#   3. 在平台上开启"新 commit 使已有审批失效"（dismiss stale reviews）
+#
+# 为什么这些是前提：Task 0 item 5 已实测确认 shell 子进程的文件写入绕过 Kiro 的能力层，
+# 所以任何"靠权限规则保护产物"的说法都不成立。真正的强制点只有受保护分支 + CODEOWNERS
+# 审批 + 本 workflow 从可信执行的原始产物重新生成门禁输入。详见 docs/protected-paths.md。
+
+name: merge-gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. 自检层：结构校验 + 脚本单测。这一层证明"判定器本身没坏"。
+  # ---------------------------------------------------------------------------
+  self-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # gate 需要 target_sha 与差异范围
+
+      - name: 装 Python 与依赖
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install --require-hashes -r requirements-ci.txt || pip install pyyaml pytest
+        # TODO(待办): 生成带哈希锁定的 requirements-ci.txt 后删掉 fallback。
+        #             当前 fallback 会拉未锁定版本，不符合依赖固定的要求。
+
+      - name: 结构校验
+        run: python3 scripts/validate_spec.py --root .
+
+      - name: 判定器单测
+        run: python3 -m pytest tests/ -q
+
+  # ---------------------------------------------------------------------------
+  # 2. 执行层：跑被测项目的测试，产出**框架原生报告**。
+  #    关键约束：这一步的产物是机器产出，agent 不可写；下游只认这里的原始报告。
+  # ---------------------------------------------------------------------------
+  run-tests:
+    runs-on: ubuntu-latest
+    needs: self-check
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # TODO(待用户输入): 这一段依赖 v1 真实接口场景仓库。
+      #   需要知道：测试框架、启动命令、原生报告格式（JUnit XML / json-report / ...）。
+      #   在此之前无法写出真实的执行步骤。
+      - name: 收集可执行测试（产出 collect 清单）
+        run: |
+          echo "TODO: 替换为真实框架的 collect 命令，例如"
+          echo "  pytest --collect-only -q --json-report --json-report-file=collected.raw.json"
+          echo "然后转换为 qa/trace/<feature>/collected.json 的格式"
+          exit 1
+
+      - name: 执行测试（产出原生报告）
+        run: |
+          echo "TODO: 替换为真实框架的执行命令，例如"
+          echo "  pytest --junitxml=qa/runs/$RUN_ID/raw/junit.xml"
+          exit 1
+
+      - name: 上传原始产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-test-artifacts
+          path: qa/runs/*/raw/
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # 3. 判定层：**从原始产物重新生成**门禁输入，再判定。
+  #    不消费候选分支工作副本里的 run.json —— 那份可被候选任意改动。
+  # ---------------------------------------------------------------------------
+  gate:
+    runs-on: ubuntu-latest
+    needs: run-tests
+    if: always()               # 执行失败也要出结论（应为 INCOMPLETE 或 FAIL）
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install pyyaml
+
+      - name: 下载原始产物
+        uses: actions/download-artifact@v4
+        continue-on-error: true    # 产物缺失本身就是证据不完整 → INCOMPLETE
+        with:
+          name: raw-test-artifacts
+          path: qa/runs/
+
+      - name: 取受保护版本的门禁规则
+        run: |
+          set -euo pipefail
+          # 规则、重试策略、review_mode 必须取 **target_sha 上已批准的版本**，
+          # 不能用候选分支里的版本 —— 否则候选可以用自带的新规则给自己放行。
+          TARGET_SHA=$(git rev-parse "origin/${{ github.base_ref }}")
+          echo "TARGET_SHA=$TARGET_SHA" >> "$GITHUB_ENV"
+          echo "CANDIDATE_SHA=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_ENV"
+          mkdir -p .gate-policy
+          git archive "$TARGET_SHA" qa/plan scripts \
+            | tar -x -C .gate-policy
+          # policy_version 用受保护版本中门禁相关路径的树哈希，可复核、可追溯
+          POLICY_VERSION=$(git rev-parse "$TARGET_SHA:qa/plan")
+          echo "POLICY_VERSION=$POLICY_VERSION" >> "$GITHUB_ENV"
+
+      - name: 从原始产物重建门禁输入
+        run: |
+          set -euo pipefail
+          # TODO(待用户输入): 依赖真实框架的原生报告格式。
+          #   这一步要把 raw/junit.xml（或等价物）转成 run.json，并绑定：
+          #   candidate_sha / target_sha / policy_version / baseline_version /
+          #   baseline_hash / 执行范围。配置标识必须脱敏，保留 traceId。
+          #   转换脚本本身属受保护路径（改它等于改证据来源）。
+          echo "TODO: scripts/rebuild_run_json.py --raw qa/runs/*/raw --out qa/runs/<id>/run.json"
+          exit 1
+
+      - name: 追溯与覆盖
+        run: |
+          python3 .gate-policy/scripts/trace_matrix.py --root . --fail-on-gap || true
+          # 这里不 fail，缺口由 gate_check 汇总成三态结论，避免两处各判一半
+
+      - name: 门槛变化扫描（提示，非结论）
+        run: |
+          set -euo pipefail
+          git diff "origin/${{ github.base_ref }}...HEAD" > candidate.diff
+          python3 .gate-policy/scripts/guard_scan.py \
+            --root . --diff-file candidate.diff --with-waivers
+
+      - name: 合并门禁判定
+        id: gate
+        run: |
+          set -euo pipefail
+          # TODO(待用户输入): review_mode 取 manual 还是 automated_required，
+          #   取决于 CI 里能否跑 agent。它写在受保护的 required-scope.yaml 里，
+          #   此处不传参、不覆盖 —— 模式必须预先固定，不得在评审失败后临时切换。
+          #
+          # TODO(待用户输入): --human-approval-ref 需从平台审批记录 API 取，
+          #   不读仓库内文件。manual 模式下缺它一律 INCOMPLETE。
+          python3 .gate-policy/scripts/gate_check.py \
+            --root . \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --target-sha "$TARGET_SHA" \
+            --policy-version "$POLICY_VERSION" \
+            --diff-file candidate.diff \
+            --out qa/reports/merge-gate-report.json
+
+      - name: 上传门禁报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: merge-gate-report
+          path: |
+            qa/reports/merge-gate-report.json
+            candidate.diff
+          retention-days: 90
+
+# ---------------------------------------------------------------------------
+# 尚未落地的部分（不要当成已实现）
+# ---------------------------------------------------------------------------
+#
+# · run-tests 与"从原始产物重建门禁输入"两步都是 `exit 1` 占位，需要真实仓库的
+#   框架与报告格式才能填。填之前这份 workflow 会失败，这是故意的 ——
+#   一个"能跑过但什么都没验证"的门禁比没有门禁更危险。
+#
+# · 评审链路（review-verdict.json 由 CI 评审执行器产出）没有写在这里，
+#   因为它依赖"CI 能否跑 agent"的答案。若不能，review_mode 保持 manual，
+#   阻断完全依赖平台人工审批记录，报告里会注明"未运行自动评审"。
+#
+# · requirements-ci.txt 的哈希锁定未生成，当前 fallback 会拉未锁定版本。
+#
+# · 本地 `make gate` 与这份 workflow 的区别：本地读工作副本，可被候选任意改动，
+#   仅供自检；合并门禁只认这里从原始产物重新生成的那份。

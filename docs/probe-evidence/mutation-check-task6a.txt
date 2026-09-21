@@ -1,0 +1,26 @@
+BASELINE: rc=0 68 passed in 0.39s
+
+=== 变异检验结果 ===
+[CAUGHT] 反例2：允许重试通过抹掉已确认阻断缺陷
+        2 failed, 66 passed in 0.39s
+[CAUGHT] 反例2：未解释的间歇失败直接算通过
+        1 failed, 67 passed in 0.37s
+[CAUGHT] 反例4：不检查评审结论是否绑定当前候选 SHA
+        1 failed, 67 passed in 0.37s
+[CAUGHT] 反例5：不检查 review-verdict 的产出者（候选自提也算）
+        2 failed, 66 passed in 0.38s
+[CAUGHT] 反例6：automated_required 下缺 verdict 也放行
+        7 failed, 61 passed in 0.46s
+[CAUGHT] 三态：证据缺失也判 PASS
+        31 failed, 37 passed in 0.67s
+[CAUGHT] 三态：把 FAIL 降级为 INCOMPLETE（掩盖质量失败）
+        16 failed, 52 passed in 0.52s
+[CAUGHT] 报告只列第一条发现（隐藏其余缺失项）
+        2 failed, 66 passed in 0.39s
+[CAUGHT] 脱敏检查失效（凭据可进运行记录）
+        1 failed, 67 passed in 0.37s
+[CAUGHT] 版本绑定字段缺失也不报
+        1 failed, 67 passed in 0.37s
+
+恢复校验: OK
+总判定: ALL_MUTATIONS_CAUGHT

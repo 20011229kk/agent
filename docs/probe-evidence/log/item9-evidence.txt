@@ -1,0 +1,7 @@
+=== item9 evidence: which .kiro subpaths were writable ===
+91c53ed347ca201e94b0051978f58421fdf3fc2e49a85571e46c63000a882d9d  /Users/AI/test-agent/.kiro/agents/probe-canary.json
+987ed8fbff6ee84f86f49c44e2c0eb1dce22a8dcdceda08d1462f5ad6be0749b  /Users/AI/test-agent/.kiro/steering/probe-canary.md
+--- steering canary exists? ---
+YES: steering writable, no prompt, no protection
+--- agents canary exists? ---
+YES: agents writable WITHOUT prompt (docs say always-ask)

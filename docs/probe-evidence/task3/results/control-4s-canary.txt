@@ -1,0 +1,53 @@
+sampler pid 37004, interval 0.25s, stops after 60s or on STOP file
+marked spawn-canary
+CANARY_PID=37028
+  PID  PPID STAT COMM
+37028 37002 RN+  zsh
+PS_ALIVE_RC=0
+marked canary-done
+stop requested
+--- window ---
+samples: 28  span: 8.4s  (11:20:35 .. 11:20:43)
+--- marks ---
+11:20:37  spawn-canary
+11:20:43  canary-done
+--- processes created during the window: 32 ---
+t=   0.29s 11:20:35  pid=37007 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   0.60s 11:20:35  pid=37018 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   0.92s 11:20:36  pid=37020 ppid=3612 (/Applications/Kiro.app/Contents/Frameworks/Kiro Helper.app/Contents/MacOS/Kiro Helper)  /bin/ps
+t=   0.92s 11:20:36  pid=37021 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   1.22s 11:20:36  pid=37022 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   1.54s 11:20:36  pid=37025 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   1.85s 11:20:37  pid=37026 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   2.17s 11:20:37  pid=37031 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   2.17s 11:20:37  pid=37028 ppid=37002 (zsh)  sleep
+t=   2.17s 11:20:37  pid=37030 ppid=37002 (zsh)  sleep
+t=   2.49s 11:20:37  pid=37034 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   2.78s 11:20:38  pid=37035 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   3.11s 11:20:38  pid=37036 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   3.43s 11:20:38  pid=37044 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   3.72s 11:20:38  pid=37045 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   4.04s 11:20:39  pid=37049 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   4.36s 11:20:39  pid=37052 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   4.65s 11:20:39  pid=37068 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   4.96s 11:20:40  pid=37069 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   5.28s 11:20:40  pid=37070 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   5.60s 11:20:40  pid=37081 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   5.91s 11:20:41  pid=37082 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   6.23s 11:20:41  pid=37083 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   6.54s 11:20:41  pid=37088 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   6.84s 11:20:42  pid=37089 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   7.16s 11:20:42  pid=37090 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   7.48s 11:20:42  pid=37093 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   7.77s 11:20:43  pid=37094 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   8.09s 11:20:43  pid=37096 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   8.09s 11:20:43  pid=37095 ppid=37002 (zsh)  (Python)
+t=   8.38s 11:20:43  pid=37101 ppid=37004 (/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python)  /bin/ps
+t=   8.38s 11:20:43  pid=37098 ppid=37002 (zsh)  sleep
+--- baseline processes that exited during the window: 2 ---
+pid=37006 /bin/ps
+pid=37005 sleep
+CONTROL_PASS: expected pid 37028 captured as created (comm=sleep)
+REPORT_RC=0
+EXPECTED_CANARY_PID=37028
+RC=0

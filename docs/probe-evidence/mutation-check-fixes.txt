@@ -1,0 +1,51 @@
+目标: F1–F5 五处修复（把每处修复退回缺陷形态）
+测试: tests/ 全量（基线 204 项）
+代码状态: F1–F5 修复之后
+脚本: docs/probe-evidence/mutation_check_fixes.py
+
+=== F1–F5 修复变异检验 ===
+[CAUGHT] F1 门禁退回只读 required_cases（REQ 范围不参与判定）
+        1 failed, 203 passed in 1.81s
+[CAUGHT] F1 有效范围不再展开必测 REQ
+        4 failed, 200 passed in 1.81s
+[CAUGHT] F1 必测 REQ 无用例覆盖也放行
+        2 failed, 202 passed in 1.82s
+[CAUGHT] F2 run.candidate_sha 缺失时跳过核对
+        1 failed, 203 passed in 1.79s
+[CAUGHT] F2 run.baseline_hash 缺失时跳过核对
+        2 failed, 202 passed in 1.85s
+[CAUGHT] F2 不再把 binding 与实际基线交叉核对
+        1 failed, 203 passed in 1.87s
+[CAUGHT] F2 run 声明的 target_sha/policy_version 不再核对
+        1 failed, 203 passed in 1.81s
+[CAUGHT] F2 用例/范围的 baseline_version 不再核对
+        2 failed, 202 passed in 1.80s
+[CAUGHT] F3 REQ 级缺陷不再传播到覆盖它的用例
+        3 failed, 201 passed in 1.83s
+[CAUGHT] F3 已关闭的缺陷仍然阻断
+        2 failed, 202 passed in 1.84s
+[CAUGHT] F3 blocking_defect_severities 退回占位（不参与计算）
+        1 failed, 203 passed in 1.82s
+[CAUGHT] F3 confirmed_blocking 路径被禁用（只看严重级）
+        2 failed, 202 passed in 1.81s
+[CAUGHT] F3 两条阻断路径全部禁用
+        5 failed, 199 passed in 1.86s
+[CAUGHT] F4 manual 模式重新消费本地 verdict
+        1 failed, 203 passed in 1.81s
+[CAUGHT] F4 来源不可信的 verdict 也当可信
+        1 failed, 203 passed in 1.83s
+[CAUGHT] F4 处置记录退回按规则码匹配
+        1 failed, 203 passed in 1.85s
+[CAUGHT] F4 处置不再要求说明与替代覆盖
+        1 failed, 203 passed in 1.81s
+[CAUGHT] F4 hint_id 不再包含文件与证据（同类提示会被一次关掉）
+        2 failed, 202 passed in 1.88s
+[CAUGHT] F5 跳过重新算作失败
+        2 failed, 202 passed in 1.81s
+[CAUGHT] F5 无 attempt 重新算作失败
+        2 failed, 202 passed in 1.84s
+[CAUGHT] F5 三态聚合退回布尔 all()
+        4 failed, 200 passed in 1.86s
+
+恢复校验: OK
+总判定: ALL_MUTATIONS_CAUGHT

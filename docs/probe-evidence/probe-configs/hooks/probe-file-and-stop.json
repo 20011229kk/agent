@@ -1,0 +1,25 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "probe-item10-file-save",
+      "description": "Task 0 item 10: records every PostFileSave firing with a timestamp so the operator can compare an agent edit against a manual editor save.",
+      "trigger": "PostFileSave",
+      "matcher": "probe-target\\.txt$",
+      "action": {
+        "type": "command",
+        "command": "printf '%s PostFileSave fired\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" >> /tmp/kiro-probe/log/item10-hook-fired.log"
+      }
+    },
+    {
+      "name": "probe-item11-stop-block",
+      "description": "Task 0 item 11: emits the documented Stop block decision. hooks/types.md documents this protocol; hooks.md overview marks Agent Stop as non-blockable. Observe which holds.",
+      "trigger": "Stop",
+      "action": {
+        "type": "command",
+        "command": "printf '%s Stop hook fired\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" >> /tmp/kiro-probe/log/item11-hook-fired.log; if [ ! -f /tmp/kiro-probe/log/item11-blocked-once ]; then touch /tmp/kiro-probe/log/item11-blocked-once; printf '{\"decision\":\"block\",\"reason\":\"PROBE_ITEM11: stop hook block decision test. Reply exactly PROBE_ITEM11_BLOCK_OBSERVED and stop.\"}\\n'; fi"
+      },
+      "timeout": 30
+    }
+  ]
+}

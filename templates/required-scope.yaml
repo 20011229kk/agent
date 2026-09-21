@@ -1,0 +1,62 @@
+# TEMPLATE — qa/plan/<feature>/required-scope.yaml
+#
+# 必测范围。由人确认，任何 agent 一律不可写。
+#
+# 硬规则：必测范围**不得由实际运行结果反推**。先定范围，再执行；跑出什么就算必测什么
+# 是本体系明确禁止的行为。
+#
+# 拷贝到 qa/plan/<feature>/required-scope.yaml 后删除本段说明。
+---
+meta:
+  feature: example-login
+  # 必须指向一个已确认的基线版本。基线版本变了而此处未更新 → 视为证据版本不匹配 → INCOMPLETE
+  baseline_version: "1.0.0"
+  confirmed_by: "zhang.san"
+  confirmed_at: "2026-09-20"
+  approval_ref: "https://git.example.com/qa-agents/-/merge_requests/42"
+
+# 本次必须验证的 REQ 清单。不在此列表中的 REQ 不参与本次门禁判定，
+# 但 trace_matrix.py 仍会在覆盖报告中显示其覆盖状态。
+required_requirements:
+  - REQ-1
+  - REQ-2
+  - REQ-3
+
+# 必须执行的 TC 清单。含 manual: true 的 TC 时，若 v1 尚不支持人工执行证据采集，
+# 门禁对该候选一律判 INCOMPLETE（手工必测项缺证据不得放行）。
+required_cases:
+  - TC-1
+  - TC-2
+  - TC-3
+  - TC-10        # manual: true —— 需人工执行证据
+
+# 重试策略：属受保护门禁配置，变更需 CODEOWNERS 审批，且会被 guard_scan 标记为质量规则变化。
+retry_policy:
+  # 允许的自动重试次数。0 表示不允许自动重试。
+  max_attempts: 1
+  # 未解释的间歇失败是否可仅凭末次通过满足门禁。
+  # false = 不可，判 INCOMPLETE（默认，推荐）
+  accept_last_pass_without_explanation: false
+  # 已确认的阻断产品缺陷是否可被重试通过覆盖。必须为 false。
+  allow_retry_to_clear_confirmed_blocking_defect: false
+
+# 阻断缺陷等级：v1 不发明数字，需项目显式列出。
+# 留空表示未定义 → 门禁判 INCOMPLETE 并提示"阻断等级未定义"。
+blocking_defect_severities: []      # 例如 ["S1", "S2"]，待项目填入
+
+# 评审模式：属受保护门禁配置，预先固定，不得在自动评审失败后临时切换。
+#   manual             = 项目事先确定走人工审批；报告注明未运行自动评审。
+#                        注意：manual 模式**不消费**仓库内的 review-verdict.json ——
+#                        本地无法验证它的来源与权限，处置依据只认平台审批记录。
+#   automated_required = agent 超时/权限拒绝/输出无法解析/verdict 缺失 一律 INCOMPLETE
+review_mode: manual
+
+# ---- 说明：required_requirements 与 required_cases 的关系 ----
+#
+# 门禁使用的**唯一有效执行范围** = required_cases ∪ （required_requirements 展开出的 TC）。
+#
+# 也就是说按 REQ 指定的范围会真的参与结果判定，不是只校验 REQ 是否存在。
+# 两份清单不一致时，报告会以 SCOPE_EXPANDED_FROM_REQ 提示，并列出声明范围与有效范围的条数。
+# 必测 REQ 若没有任何用例覆盖 → REQUIRED_REQ_WITHOUT_CASE，不得放行。
+#
+# 手工用例（manual: true）走同一条范围判定路径：不进可自动化分母，但必须有执行证据。

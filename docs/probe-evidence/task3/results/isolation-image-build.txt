@@ -1,0 +1,26 @@
+隔离镜像构建记录（2026-09-21）。
+
+命令：
+  podman build --platform linux/arm64 -t qa-executor:0.1.0 -f isolation/Containerfile .
+
+关键片段（完整 pip 输出略）：
+
+STEP 1/4: FROM docker.io/library/python:3.12-slim
+Trying to pull docker.io/library/python:3.12-slim...   ← 拉取 arm64 manifest
+STEP 2/4: RUN python -m pip install --no-cache-dir --upgrade "pip==25.2"
+          && python -m pip install --no-cache-dir "pytest==8.4.2" "PyYAML==6.0.2"
+Successfully installed PyYAML-6.0.2 iniconfig-2.3.0 packaging-26.3 pluggy-1.6.0
+                      pygments-2.21.0 pytest-8.4.2
+STEP 3/4: WORKDIR /work
+STEP 4/4: CMD ["python", "-c", "print('qa-executor image; pass a command after -- instead')"]
+COMMIT qa-executor:0.1.0
+Successfully tagged localhost/qa-executor:0.1.0
+170015072bbaa4e96301d86d0a7e27111861f77866ac9cb037987ac8b2b5f3de
+BUILD_RC=0
+
+注意：
+- 构建期需要外网（拉镜像 + 装依赖），执行期不需要（run-isolated.sh 用 --network=none）。
+  这是故意的分工：依赖在构建期锁定版本，执行期不给联网机会。
+- pip 提示 26.2.1 可用，未升级：版本锁定优先于跟进最新版，升级需单独评估并重跑验证。
+- 本机原有的 docker.io/library/python:3.12-slim 是 amd64，直接用会走模拟层；
+  故显式 --platform linux/arm64 重新拉取。

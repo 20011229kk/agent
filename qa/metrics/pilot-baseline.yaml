@@ -1,0 +1,91 @@
+# 试点前基线 —— 效果度量的对照数据
+#
+# R9 硬规则：基线必须先于试点采集。未采集到的项一律用 status: MISSING 并给出 reason，
+# **不得留空、不得以 0 填充**。缺基线数据的指标在效果报告中必须标"不可比"，不得宣称改善。
+#
+# 每个度量项统一结构：
+#   value:  实测值；status 为 MISSING 时必须为 null
+#   unit:   单位
+#   status: MEASURED | MISSING
+#   reason: status 为 MISSING 时必填，说明为什么采不到
+#   source: status 为 MEASURED 时必填，说明数据来自哪里
+---
+meta:
+  schema_version: "1.0.0"
+  collected_at: "2026-09-20"
+  collected_by: "qa-agents Task 1"
+  # 整体状态：只要有任一 MISSING 项即为 INCOMPLETE
+  status: INCOMPLETE
+  # 试点目标仓库：待用户提供（定稿计划的待补输入①）
+  pilot_repo:
+    value: null
+    status: MISSING
+    reason: "用户尚未提供 v1 真实接口场景仓库；Task 4/5 前需要，先只读摸清框架与原生报告格式"
+  # 本基线所依据的样本需求集
+  sample_requirements:
+    value: null
+    status: MISSING
+    reason: "依赖 pilot_repo 确定后才能选定样本需求"
+
+# ---- 效率类：用例产出 ----
+efficiency:
+  # 人工从一份需求产出一套用例的耗时
+  manual_case_design_minutes_per_requirement:
+    value: null
+    unit: "minutes/requirement"
+    status: MISSING
+    reason: "需在选定样本需求后，由测试工程师实测记录，不能用估计值充当基线"
+  # 人工把一条用例落地为自动化脚本的耗时
+  manual_automation_minutes_per_case:
+    value: null
+    unit: "minutes/case"
+    status: MISSING
+    reason: "依赖 pilot_repo 的现有框架，框架不同耗时不可比"
+  # 人工定位一次失败根因的耗时
+  manual_triage_minutes_per_failure:
+    value: null
+    unit: "minutes/failure"
+    status: MISSING
+    reason: "需从历史失败记录中抽样计时，历史数据源待确认"
+
+# ---- 质量类 ----
+quality:
+  # 返工量：用例评审后需修改的比例
+  case_rework_rate:
+    value: null
+    unit: "ratio"
+    status: MISSING
+    reason: "需统计历史用例评审记录，数据源待确认"
+  # 缺陷逃逸率：流出到 UAT/线上的缺陷占比
+  defect_escape_rate:
+    value: null
+    unit: "ratio"
+    status: MISSING
+    reason: "需从缺陷系统统计，且需先确认阻断缺陷等级定义（定稿计划待补输入②）"
+  # 需求覆盖率现状（人工统计口径）
+  requirement_coverage_manual_count:
+    value: null
+    unit: "ratio"
+    status: MISSING
+    reason: "当前无独立需求基线，人工口径不可得——这正是本体系要解决的问题之一"
+
+# ---- 归因准确率对照集 ----
+# 历史失败的人工归因标注，用作 qa-executor 两轴归因准确率的对照。
+# 每条结构：
+#   id / raw_evidence_path / human_root_cause / human_stability / annotated_by
+# human_root_cause 取值：UNKNOWN | ENV | DATA | SCRIPT | PRODUCT | DEPENDENCY
+# human_stability  取值：稳定失败 | 间歇失败 | 未确认
+triage_reference_set:
+  status: MISSING
+  reason: "需从 pilot_repo 的历史失败记录中抽取并由人工标注；抽样量与标注人待定"
+  target_sample_size: 30
+  entries: []
+
+# ---- 采集待办 ----
+# 这些项解阻后必须回填本文件，并把 meta.status 改为 COMPLETE。
+# 在 meta.status 为 INCOMPLETE 期间，metrics.py 对相关指标一律输出"不可比"。
+todo:
+  - "用户提供 pilot_repo → 解阻 sample_requirements 与 manual_automation_minutes_per_case"
+  - "确认阻断缺陷等级定义位置 → 解阻 defect_escape_rate"
+  - "抽取并人工标注 30 条历史失败 → 解阻 triage_reference_set"
+  - "选定样本需求后实测人工耗时 → 解阻 efficiency 全部三项"
