@@ -21,11 +21,25 @@ Python 里，才能对每条拒绝理由写回归测试（shell 里几乎测不�
 
 用法
 ----
-  python3 isolation/mount_policy.py plan [--rw REL]... [--image REF] [--out FILE]
+  python3 isolation/mount_policy.py run  [--rw REL]... -- <命令...>   # 校验并直接执行
+  python3 isolation/mount_policy.py plan [--rw REL]... -- <命令...>   # 只打印计划
+  python3 isolation/mount_policy.py image [--field reference|digest]
   python3 isolation/mount_policy.py manifest
 
-`plan` 成功时把 podman 参数逐行写出（每行一个参数，便于 shell 读入数组）；
-失败时在 stderr 打印逐条拒绝理由并以 65 退出（EX_DATAERR），不产生任何参数。
+**参数传递必须无损：为什么是 `run` 而不是"让 shell 读 plan 的输出"。**
+上一版 `plan` 把 podman 参数逐行写出、由 shell 按行读回数组。外部复核实测出确定的
+假成功：
+
+    python -c "print('BEGIN')\nraise SystemExit(42)"
+
+单行版本正确退出 42；**多行版本只打印 BEGIN 就退出 0** —— 参数内部的换行被当成了
+行分隔符，第二行变成 Python 的另一个命令行参数，`raise SystemExit(42)` 根本没执行。
+同理 `['', 'tail']` 里的空参数在按行读取时被跳过。对 agent 来说这意味着多行
+`python -c` / `sh -c` 里的断言或清理步骤可能被静默省略，而退出码显示成功。
+
+现在 `run` 模式在 Python 内校验后直接 `os.execvp("podman", argv)`：参数数组从
+调用方的 argv 到 podman 的 argv 之间**不经过任何按行文本协议**。`plan` 仍保留给
+排查与测试用，但默认输出 NUL 分隔（`--sep line` 才回到逐行，且明确标注不可用于执行）。
 """
 
 from __future__ import annotations
@@ -34,6 +48,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import sys
 
 try:
@@ -206,6 +221,64 @@ def validate_rw(requests, policy: dict, root: str = None):
     return accepted, rejections
 
 
+def inspect_image(ref: str):
+    """一次 podman inspect 同时取回 Digest 与 Id，返回 (digest, image_id, error)。
+
+    两个值必须在**同一次**调用里取：先按标签核对 digest、再按标签启动，中间标签可能
+    被重新指向（重新构建同名 tag 即可），那是个竞态。取到 Id 后按 Id 启动，
+    标签之后怎么动都与本次执行无关。
+    """
+    try:
+        out = subprocess.run(
+            ["podman", "image", "inspect", ref,
+             "--format", "{{.Digest}}\t{{.Id}}"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, None, "podman 调用失败: %s" % exc
+    if out.returncode != 0:
+        return None, None, (out.stderr.decode("utf-8", "replace").strip()
+                            or "podman inspect 退出 %d" % out.returncode)
+    text = out.stdout.decode("utf-8", "replace").strip()
+    parts = text.split("\t")
+    if len(parts) != 2 or not parts[1]:
+        return None, None, "无法解析 inspect 输出: %r" % text
+    return parts[0] or None, parts[1], None
+
+
+def resolve_runtime_image(policy: dict, requested: str = None,
+                          inspector=inspect_image):
+    """决定**实际启动**用的不可变镜像标识，返回 (image_id, info, rejection)。
+
+    上一版只核对镜像名：`resolve_image` 返回 `image.reference`，`build_args` 原样把
+    可变标签交给 podman，策略里的 `image.digest` 从未在普通执行路径上被用到。
+    外部复核指出这个缺口：禁止 `QA_ISOLATION_IMAGE` 覆盖只限制了**名字**，
+    同名标签被重新构建或移动之后，后续执行会静默用上另一个镜像。C0 只在验证脚本里跑，
+    普通 `run-isolated.sh` 路径不跑 C0。
+
+    现在普通执行路径也强制核对：digest 不符、镜像不存在、策略未记录 digest → 拒绝执行。
+    """
+    ref, rej = resolve_image(policy, requested)
+    if rej:
+        return None, None, rej
+
+    expected = policy["image"].get("digest")
+    if not expected:
+        return None, None, ("IMAGE_DIGEST_UNSET",
+                            "策略未记录 image.digest，无法确认运行时镜像身份；"
+                            "请先 podman image inspect %s --format '{{.Digest}}' "
+                            "并写回策略" % ref)
+
+    digest, image_id, err = inspector(ref)
+    if err:
+        return None, None, ("IMAGE_NOT_FOUND",
+                            "取不到镜像 %s 的身份：%s" % (ref, err))
+    if digest != expected:
+        return None, None, ("IMAGE_DIGEST_MISMATCH",
+                            "镜像 %s 的 digest 与策略不一致：实际 %s，策略 %s"
+                            % (ref, digest, expected))
+    return image_id, {"reference": ref, "digest": digest, "image_id": image_id}, None
+
+
 def resolve_image(policy: dict, requested: str = None):
     """决定用哪个镜像，返回 (reference, rejection_or_None)。
 
@@ -254,47 +327,110 @@ def build_args(accepted, policy: dict, image: str, root: str = None,
     return args
 
 
-def cmd_plan(argv) -> int:
-    ap = argparse.ArgumentParser(prog="mount_policy.py plan")
+def _common_args(prog: str, argv):
+    ap = argparse.ArgumentParser(prog=prog)
     ap.add_argument("--rw", action="append", default=[])
     ap.add_argument("--image", default=None)
-    ap.add_argument("--out", default=None, help="参数输出文件，默认 stdout")
     ap.add_argument("--policy", default=None)
     ap.add_argument("--repo", default=None,
                     help="仅用于测试；生产路径固定由本文件位置推出")
     ap.add_argument("command", nargs=argparse.REMAINDER)
-    args = ap.parse_args(argv)
+    return ap.parse_args(argv)
 
+
+def _prepare(args, verify_image: bool, inspector=inspect_image):
+    """公共校验流程，返回 (podman_argv, info, rc)。rc 非 0 时 argv 为 None。"""
     root = args.repo or repo_root()
     try:
         policy = load_policy(args.policy)
     except PolicyError as exc:
         print("POLICY_ERROR: %s" % exc, file=sys.stderr)
-        return EX_CONFIG
+        return None, None, EX_CONFIG
 
     command = args.command
     if command and command[0] == "--":
         command = command[1:]
     if not command:
         print("REJECTED: NO_COMMAND 缺少要在容器内执行的命令", file=sys.stderr)
-        return EX_DATAERR
+        return None, None, EX_DATAERR
 
-    image, img_rej = resolve_image(policy, args.image)
-    accepted, rejections = validate_rw(args.rw, policy, root)
-    if img_rej:
-        rejections.append((args.image, img_rej[0], img_rej[1]))
+    rejections = []
+    info = {}
+    if verify_image:
+        # 普通执行路径也核对运行时镜像身份，并按不可变 Id 启动
+        image, img_info, img_rej = resolve_runtime_image(policy, args.image,
+                                                        inspector)
+        if img_rej:
+            rejections.append((args.image or policy["image"]["reference"],
+                               img_rej[0], img_rej[1]))
+        else:
+            info.update(img_info)
+    else:
+        image, img_rej = resolve_image(policy, args.image)
+        if img_rej:
+            rejections.append((args.image, img_rej[0], img_rej[1]))
+
+    accepted, rw_rejections = validate_rw(args.rw, policy, root)
+    rejections.extend(rw_rejections)
 
     if rejections:
         for raw, code, why in rejections:
             print("REJECTED: %s %r —— %s" % (code, raw, why), file=sys.stderr)
         print("共 %d 条请求被拒绝，未生成任何挂载参数。" % len(rejections),
               file=sys.stderr)
-        return EX_DATAERR
+        return None, None, EX_DATAERR
 
-    out_args = build_args(accepted, policy, image, root, command)
-    text = "\n".join(out_args) + "\n"
-    if args.out:
-        with open(args.out, "w") as fh:
+    return build_args(accepted, policy, image, root, command), info, 0
+
+
+def cmd_run(argv, inspector=inspect_image, execer=None) -> int:
+    """校验通过后**直接 exec podman**，参数数组不经过任何文本协议。
+
+    这是修复"按行传参截断多行命令"的关键：调用方 argv → Python argv → podman argv，
+    全程是数组，换行与空参数都原样保留。
+    """
+    args = _common_args("mount_policy.py run", argv)
+    podman_argv, info, rc = _prepare(args, verify_image=True, inspector=inspector)
+    if rc:
+        return rc
+    if os.environ.get("QA_ISOLATION_TRACE"):
+        print("IMAGE_VERIFIED digest=%s id=%s"
+              % (info.get("digest"), (info.get("image_id") or "")[:16]),
+              file=sys.stderr)
+    argv_full = ["podman"] + podman_argv
+    if execer is not None:          # 测试注入点
+        return execer(argv_full)
+    os.execvp("podman", argv_full)  # 不返回
+    return 70                       # pragma: no cover
+
+
+def cmd_plan(argv) -> int:
+    """只打印计划，供排查与测试。**输出不得再被 shell 拼回命令执行。**
+
+    默认 NUL 分隔：逐行分隔会把参数内部的换行变成分隔符，空参数也会消失，
+    这正是上一版假成功的根源。`--sep line` 仅供人读。
+    """
+    ap = argparse.ArgumentParser(prog="mount_policy.py plan", add_help=False)
+    ap.add_argument("--out", default=None, help="参数输出文件，默认 stdout")
+    ap.add_argument("--sep", default="nul", choices=["nul", "line", "json"])
+    ap.add_argument("--verify-image", action="store_true",
+                    help="同时核对运行时镜像身份（需要 podman）")
+    known, rest = ap.parse_known_args(argv)
+    args = _common_args("mount_policy.py plan", rest)
+
+    podman_argv, _info, rc = _prepare(args, verify_image=known.verify_image)
+    if rc:
+        return rc
+
+    if known.sep == "json":
+        text = json.dumps(podman_argv, ensure_ascii=False) + "\n"
+    elif known.sep == "line":
+        text = "\n".join(podman_argv) + "\n"
+    else:
+        text = "\0".join(podman_argv) + "\0"
+
+    if known.out:
+        with open(known.out, "w") as fh:
             fh.write(text)
     else:
         sys.stdout.write(text)
@@ -337,7 +473,8 @@ def cmd_manifest(argv) -> int:
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    modes = {"plan": cmd_plan, "manifest": cmd_manifest, "image": cmd_image}
+    modes = {"run": cmd_run, "plan": cmd_plan, "manifest": cmd_manifest,
+             "image": cmd_image}
     if not argv or argv[0] not in modes:
         print(__doc__)
         return EX_DATAERR

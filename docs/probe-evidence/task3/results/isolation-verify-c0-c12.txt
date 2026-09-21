@@ -1,4 +1,4 @@
-=== 隔离验证 2026-09-21T12:07:22+0800 ===
+=== 隔离验证 2026-09-21T17:25:26+0800 ===
 repo:   /Users/AI/test-agent
 image:  localhost/qa-executor:0.1.0（取自 isolation/mount-policy.yaml，不由调用方指定）
 canary before:  36b5ee47936393d01d5cf8cdbd6c2e23e7b6eb901cedc6aa5047bf19e476441a
@@ -8,8 +8,8 @@ VERSION before: e9dd8507f4bf0c6f42458e41aea833ad0bd3f6127272335eee9bf4d58541ed67
   "repo_root": "/Users/AI/test-agent",
   "sha256": {
     "isolation/mount-policy.yaml": "89e59e64ea36b1b95bece681d491219cbd1d6e6912f0a2860a33f664a2e80e9d",
-    "isolation/mount_policy.py": "592de904d63bce243aed16444277fa35326d7e9c8e63d0270998c86570bb8d41",
-    "isolation/run-isolated.sh": "6860ff30f94d1285618dabd8a020a70f70a7d5b5f2422bb4f396dc8042950a24",
+    "isolation/mount_policy.py": "1c545e983652d755e221d1ed3731bf04f7fe13e2ee3ed32af536e0fd45530d9d",
+    "isolation/run-isolated.sh": "15e50b543a8a931b627241f006fff09add6dd881bb8a8f5c2e361816ef2c160a",
     "isolation/Containerfile": "3bbe96f94bcf2c8e48639fab50b40f779e57e3200a3e28ceeb163e39752fc05a"
   }
 }
@@ -93,23 +93,36 @@ C5: PASS（哈希未变 + 拒绝原文）
 --- C6 回归 R1：--rw qa/baseline 重新挂载受保护目录 ---
 REJECTED: PROTECTED_PATH 'qa/baseline' —— 位于受保护路径之内（受保护项: qa/baseline）
 共 1 条请求被拒绝，未生成任何挂载参数。
-FATAL: 挂载策略校验未通过，未启动容器
 runner_rc=65
 C6: PASS（退出 65 + PROTECTED_PATH 拒绝原文 + 容器未启动）
 
 --- C7 回归 R2：--rw ../outside 父目录穿越 ---
 REJECTED: OUTSIDE_REPO '../outside' —— 规范化后落在仓库之外: /Users/AI/outside
 共 1 条请求被拒绝，未生成任何挂载参数。
-FATAL: 挂载策略校验未通过，未启动容器
 runner_rc=65
 C7: PASS（退出 65 + OUTSIDE_REPO 拒绝原文 + 容器未启动）
 
 --- C8 镜像覆盖应被策略拒绝 ---
 REJECTED: IMAGE_OVERRIDE_DENIED 'docker.io/library/alpine:3.20' —— 策略不允许覆盖镜像：请求 'docker.io/library/alpine:3.20'，策略 'localhost/qa-executor:0.1.0'
 共 1 条请求被拒绝，未生成任何挂载参数。
-FATAL: 挂载策略校验未通过，未启动容器
 runner_rc=65
 C8: PASS
+
+--- C10 参数传递保真：多行命令的失败逻辑必须真的执行 ---
+阳性对照（单行）rc=42  输出: BEGIN
+实验（多行）rc=42  输出: BEGIN
+C10: PASS（多行失败逻辑已执行，退出 42）
+
+--- C11 参数传递保真：空参数必须保留在原位置 ---
+runner_rc=0
+['', 'tail']
+C11: PASS
+
+--- C12 运行时镜像身份：digest 不符必须拒绝执行 ---
+REJECTED: IMAGE_DIGEST_MISMATCH 'localhost/qa-executor:0.1.0' —— 镜像 localhost/qa-executor:0.1.0 的 digest 与策略不一致：实际 sha256:d14c95bf18260f1cf7e1b9cf0fbb97c9a48001f29eb68dc2f60e90d766cbaf45，策略 sha256:0000000000000000000000000000000000000000000000000000000000000000
+共 1 条请求被拒绝，未生成任何挂载参数。
+rc=65
+C12: PASS（普通执行路径按 digest 绑定，不符即拒）
 
 --- C9 仓库根覆盖应被拒绝（否则受保护清单整体失效） ---
 FATAL: 不接受 QA_ISOLATION_REPO 覆盖仓库根（请求 /tmp，实际 /Users/AI/test-agent）
@@ -117,7 +130,8 @@ runner_rc=78
 C9: PASS
 
 === 总判定 ===
-VERDICT: PASS（C0–C9 共 10 项，含镜像身份核对、阳性对照与两条回归反例）
+VERDICT: PASS（C0–C12 共 13 项：镜像身份核对与运行时绑定、阳性对照、
+         两条挂载绕过回归、两条参数保真回归）
 
 作用域与残余风险（不要省略）：
 1. 只覆盖**通过本包装器发起**的 shell 写入。工具级 fs_write 由 IDE 宿主进程执行，

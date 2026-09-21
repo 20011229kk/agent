@@ -49,8 +49,8 @@
 | `task3/results/reduced-calibration-repeat5/` | 标定轮的降采样归档 | 采样器修正后 |
 | `task3/results/isolation-image-build.txt` | `qa-executor:0.1.0` 镜像构建记录 | 首版（未锁 digest） |
 | `task3/results/isolation-verify-arm64.txt` | 首版隔离验证 5/5（**该版本包装器存在扩权漏洞**，见下） | 修复前 |
-| `task3/results/isolation-verify-c0-c9.txt` | **当前版本：C0–C9 全 PASS**，含镜像身份核对与两条绕过回归 | 策略化之后 |
-| `task3/results/isolation-pytest-in-container.txt` | 容器内跑完仓库全量测试 292 项通过 | 策略化之后 |
+| `task3/results/isolation-verify-c0-c12.txt` | **当前版本：C0–C12 全 PASS**，含镜像运行时绑定、两条挂载绕过回归、两条参数保真回归 | 参数保真与 digest 绑定修复之后 |
+| `task3/results/isolation-pytest-in-container.txt` | 容器内跑完仓库全量测试通过 | 同上 |
 
 ### 归档策略：为什么不是原样入库
 
@@ -60,15 +60,28 @@
 
 现在用 `proc_diff_probe.py reduce`：只减体积，不减可核对性。
 
+准确叫法是**保留所有快照时间点的字段裁剪归档**，不是"完整原始证据"。
+
 | 保留 | 用途 |
 |---|---|
 | 每次快照的 `t` / `wall` | 逐条复核间隙分布与 max 间隙 |
 | Kiro 进程子树（`ppid`/`lstart`/`comm_id`） | 复核"Kiro 树中有没有新建进程"这条结论 |
-| 每次快照完整进程表的 `procs_sha256` | 证明降采样没有挑样本 |
+| 每次快照完整进程表的 `procs_sha256` | 在**原件仍存在**时校验对应关系 |
 | `comm-table.json` | `comm_id` → 完整命令行原文，未截断 |
-| `reduced-manifest.json` 里完整文件的 sha256 与字节数 | 需要时与本地留存件比对 |
+| `reduced-manifest.json` 里完整文件的 sha256 与字节数 | 与本地留存件比对 |
 
 效果：141MB → 2.9MB（pass 3）、38MB → 0.8MB（pass 4）。
+
+**这套归档的能力边界（第二轮外部复核指出，成立）：**
+
+- **哈希本身不能证明"没有挑样本"。** 它只能在原件存在时校验对应关系；原件一旦删除，
+  只剩哈希既无法重建完整进程表，也无法复核被裁掉的内容。
+- 因此需要长期独立复核时，原始压缩件应保留在 Git 之外的受控 artifact 存储，
+  Git 只记标识与摘要。目前原件只在本地 `/tmp`（manifest 里有路径），**属于会过期的证据**。
+- `kiro_tree` 是按"命令行含 kiro 的根及其后代"这条规则筛出来的。复核它只能确认
+  **该规则被忠实应用**，与"写入 PID 归属"无关。
+- 间隔是**快照开始时刻之间的差值**，不代表进程表是同一瞬间原子采集，也不代表必然捕获
+  所有超过 100ms 的进程。
 
 ### 外部复核（2026-09-21）判"包装器作为权限边界不通过"，已修
 

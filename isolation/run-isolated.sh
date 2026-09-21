@@ -1,18 +1,26 @@
 #!/bin/zsh
-# 在容器内执行 qa-executor 的 shell 命令。挂载范围由策略决定，不由调用参数决定。
+# 在容器内执行 qa-executor 的 shell 命令。挂载范围与镜像身份由策略决定，
+# 不由调用参数决定。
 #
 # 存在理由（实测依据，见 docs/capability-matrix.md item 5）：
 # agent 的 shell 子进程写入**完全绕过** Kiro 能力层，包括配置不可更改的 kiro-scope
 # 硬拒绝。所以"executor 的写入范围"不能由 permissions 规则保证。
 #
-# 上一版的缺陷（外部复核在真实容器里实测出来，两条都成功、退出 0、宿主哈希变化）：
-#   --rw qa/baseline  → 把受保护的覆盖率分母重新挂成可写
-#   --rw ../outside   → 穿越到仓库外的同级目录写入
-# 现在所有 --rw 请求都交给 isolation/mount_policy.py 按 isolation/mount-policy.yaml
-# 校验；本脚本自己不再拼任何挂载参数。
+# 本脚本刻意保持极薄：**只做参数转交，不做任何解析与拼装。**
+# 原因是上一版在这里踩了两个坑，两个都由外部复核实测出来：
+#
+#   1. 接受调用方给的任意 --rw（只检查目录存在）→ `--rw qa/baseline` 能把受保护的
+#      覆盖率分母重新挂成可写，`--rw ../outside` 能穿越到仓库外，两条都写入成功。
+#      → 挂载范围改由 isolation/mount-policy.yaml 决定，本脚本不再碰挂载参数。
+#   2. 从 mount_policy.py 的输出**按行**读回 podman 参数 → 参数内部的换行被当成
+#      分隔符。`python -c $'print("BEGIN")\nraise SystemExit(42)'` 只打印 BEGIN 就
+#      退出 0，`raise SystemExit(42)` 压根没执行；空参数也被跳过。这是最坏的一类
+#      假成功：失败逻辑没跑，退出码却是成功。
+#      → 现在由 mount_policy.py run 在 Python 内校验后直接 exec podman，
+#        参数数组从这里的 "$@" 一路到 podman 的 argv，中间没有任何文本协议。
 #
 # 诚实的边界（三条，都别省）：
-# 1. 本包装器只约束**通过 shell 发起**的写入。工具级 fs_write 由 IDE 宿主进程执行，
+# 1. 只约束**通过 shell 发起**的写入。工具级 fs_write 由 IDE 宿主进程执行，
 #    不经过这里（item 8 / docs/probe-evidence/task3/task3-findings.md）。
 # 2. 目前**没有机制强制**必须通过本包装器执行；直接在宿主机跑命令依然可行。
 # 3. 策略文件与校验器都在仓库里，对宿主机有写权限的 agent 可以改掉它们。这是护栏，
@@ -20,7 +28,7 @@
 #
 # 用法：
 #   isolation/run-isolated.sh [--rw <仓库内相对路径>]... [--print-manifest] -- <命令>
-# 例：
+# 例（多行命令也保证原样传入）：
 #   isolation/run-isolated.sh --rw qa/runs -- python -m pytest tests -q
 set -u
 
@@ -66,24 +74,6 @@ if [[ $PRINT_MANIFEST -eq 1 ]]; then
   python3 "$POLICY_TOOL" manifest >&2
 fi
 
-ARGFILE=$(mktemp -t qa-isolation-args)
-trap 'rm -f "$ARGFILE"' EXIT
-
-# 策略校验 + 参数生成。被拒绝时不生成任何参数，直接把理由透传给调用方。
-if ! python3 "$POLICY_TOOL" plan ${RW_ARGS[@]:-} ${IMAGE_ARGS[@]:-} --out "$ARGFILE" -- "$@"; then
-  echo "FATAL: 挂载策略校验未通过，未启动容器" >&2
-  exit 65
-fi
-
-PODMAN_ARGS=()
-while IFS= read -r line; do
-  [[ -z "$line" ]] && continue
-  PODMAN_ARGS+=("$line")
-done < "$ARGFILE"
-
-if [[ ${#PODMAN_ARGS[@]} -eq 0 ]]; then
-  echo "FATAL: 策略未产生任何参数" >&2
-  exit 70
-fi
-
-exec podman ${PODMAN_ARGS[@]}
+# "$@" 原样转交：参数内部的换行、空参数、引号、空格、反斜杠都由 argv 语义保证，
+# 不经过任何逐行/分隔符协议。校验失败时 mount_policy.py 以 65/78 退出且不启动容器。
+exec python3 "$POLICY_TOOL" run ${RW_ARGS[@]:-} ${IMAGE_ARGS[@]:-} -- "$@"

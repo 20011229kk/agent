@@ -413,8 +413,8 @@ CI reviewer 按评审职责配置为只读，并显式授权所需读取与调�
 | 构件 | 作用 |
 |---|---|
 | `isolation/mount-policy.yaml` | **可写范围由策略决定，不由调用参数决定**：`allowed_rw` 白名单 + `protected` 双重否决 + 镜像引用/digest + `network.mode` |
-| `isolation/mount_policy.py` | 策略校验器（可单测）：路径归一化、仓库外穿越、符号链接组件、仓库根重叠、rw 间嵌套、受保护路径、镜像覆盖 |
-| `isolation/run-isolated.sh` | 执行包装器：自己**不拼**任何挂载参数，全部交策略生成；拒绝 `QA_ISOLATION_REPO` 覆盖仓库根 |
+| `isolation/mount_policy.py` | 策略校验器（可单测）+ **执行入口**：校验通过后直接 `exec podman`；核对运行时镜像 digest 并按不可变 image id 启动 |
+| `isolation/run-isolated.sh` | 极薄转交层：不解析、不拼装，`"$@"` 原样交给 `mount_policy.py run`；拒绝 `QA_ISOLATION_REPO` 覆盖仓库根 |
 | `isolation/probes/net_probe.py` | 网络探针：只报事实（接口列表 / errno / 三态 verdict），不下判定 |
 | `isolation/verify-isolation.sh` | 边界验证 C0–C9，每条要求"命令确实执行 + 拒绝原文 + 宿主机 canary 前后哈希" |
 
@@ -432,9 +432,24 @@ CI reviewer 按评审职责配置为只读，并显式授权所需读取与调�
 | **C7** | **回归 R2**：`--rw ../outside` 父目录穿越 → 退出 65 + `OUTSIDE_REPO`，容器未启动 |
 | C8 | `QA_ISOLATION_IMAGE` 覆盖镜像 → 拒绝 |
 | C9 | `QA_ISOLATION_REPO` 覆盖仓库根 → 退出 78（否则受保护清单整体失效） |
+| **C10** | **参数保真回归**：多行 `python -c` 的失败逻辑必须真的执行（单行阳性对照 42 → 多行也必须 42） |
+| **C11** | **参数保真回归**：空参数必须保留在原位置（`['', 'tail']`） |
+| **C12** | **运行时镜像绑定**：digest 与策略不符 → 拒绝执行（不是只在 C0 里核对一次） |
 
-另：容器内跑完仓库全量测试 **292 项通过**；`isolation/` 自身有 58 项单测
-（`tests/test_mount_policy.py` 42 + `tests/test_net_probe.py` 16）。
+另：容器内跑完仓库全量测试通过；`isolation/` 自身有 74 项单测
+（`tests/test_mount_policy.py` 58 + `tests/test_net_probe.py` 16），其中 4 项是需要
+podman 的端到端参数保真用例（缺 podman 时 skip，不假装通过）。
+
+**参数传递必须无损（这条是被实测缺陷逼出来的设计约束）：** 校验器的输出**不得**再被
+shell 拼回命令执行。上一版让 shell 按行读回 podman 参数，结果参数内部的换行被当成
+分隔符：`python -c $'print("BEGIN")\nraise SystemExit(42)'` 只打印 BEGIN 就退出 **0**，
+`raise SystemExit(42)` 根本没执行；空参数也被跳过。现在 `mount_policy.py run` 在 Python
+内校验后直接 `os.execvp`，argv 全程是数组；`plan` 仅供排查，默认 NUL 分隔并标注不可执行。
+
+**运行时镜像绑定：** 只在验证脚本里核对 digest 是不够的——普通执行路径若按可变标签启动，
+同名标签被重新构建后会静默换成另一个镜像。现在 `run` 路径用**一次** `podman image inspect`
+同时取回 digest 与 image id，digest 与策略一致才继续，并按 **image id** 启动，
+关掉"核对标签后又按标签运行"的竞态。
 
 **依赖与可重复性（按实际锁定程度表述）：** 执行期 `--network=none`，依赖只能构建期装。
 已锁：基础镜像按 **manifest digest** 固定、pip/pytest/PyYAML 及其传递依赖

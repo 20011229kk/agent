@@ -338,8 +338,12 @@ def cmd_reduce(base: str, dest: str) -> int:
     折中办法是**只减少体积，不减少可核对性**：
       - 每次快照的 t / wall 全部保留 → 间隙分布、max 间隙可逐条复核
       - Kiro 进程子树全部保留 → "Kiro 树中有没有新建进程"这条结论可复核
-      - 每次快照完整进程表的 sha256 全部保留 → 可证明降采样没有挑样本
-      - 完整文件的 sha256 与字节数记录在 manifest 里 → 需要时可与本地留存件比对
+      - 每次快照完整进程表的 sha256 全部保留 → **在原件仍存在时**可校验对应关系
+      - 完整文件的 sha256 与字节数记录在 manifest 里 → 与本地留存件比对
+
+    能力边界（别说过头）：哈希本身**不能**证明"没有挑样本"。原件一旦删除，只剩哈希既无法
+    重建完整进程表，也无法复核被裁掉的内容。准确叫法是"保留所有快照时间点的字段裁剪归档"；
+    需要长期独立复核时，原始压缩件应放入 Git 之外的受控 artifact 存储。
     """
     p = _paths(base)
     if not os.path.exists(p["samples"]):
@@ -422,6 +426,11 @@ def cmd_reduce(base: str, dest: str) -> int:
         "comm_table": {"file": "comm-table.json", "entries": len(comm_table),
                        "note": "comm_id → 完整命令行原文，内容未截断"},
         "dropped": "非 Kiro 进程子树的逐进程明细（其存在性由 n_procs 与 procs_sha256 约束）",
+        "limits": [
+            "哈希只能在原件存在时校验对应关系，不能证明未挑样本，也不能重建被裁内容",
+            "间隔是快照开始时刻之差，非原子采集，不保证捕获所有超过该间隔的进程",
+            "kiro_tree 是按既定筛选规则产出，与写入 PID 归属无关",
+        ],
     }
     with open(os.path.join(dest, "reduced-manifest.json"), "w") as fh:
         json.dump(info, fh, indent=2, ensure_ascii=False)

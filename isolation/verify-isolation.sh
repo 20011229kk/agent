@@ -264,6 +264,70 @@ else
 fi
 echo
 
+echo "--- C10 参数传递保真：多行命令的失败逻辑必须真的执行 ---"
+# 外部复核实测出的假成功：按行传参会把参数内部的换行当成分隔符，
+# raise SystemExit(42) 变成另一个 argv 项而没被执行，退出码却是 0。
+# 阳性对照（单行）必须先拿到 42，否则本条作废。
+zsh "$RUN" -- python -c "print('BEGIN'); raise SystemExit(42)" \
+  > "$SANDBOX/log/c10-control.out" 2>&1
+C10_CTRL_RC=$?
+echo "阳性对照（单行）rc=$C10_CTRL_RC  输出: $(tr -d '\n' < "$SANDBOX/log/c10-control.out")"
+zsh "$RUN" -- python -c $'print(\'BEGIN\')\nraise SystemExit(42)' \
+  > "$SANDBOX/log/c10.out" 2>&1
+C10_RC=$?
+echo "实验（多行）rc=$C10_RC  输出: $(tr -d '\n' < "$SANDBOX/log/c10.out")"
+if [[ "$C10_CTRL_RC" != "42" ]]; then
+  echo "C10: VOID（单行阳性对照没拿到 42，rc=$C10_CTRL_RC）"; FAILED=1
+elif ! grep -q "BEGIN" "$SANDBOX/log/c10.out"; then
+  echo "C10: FAIL（多行命令连 BEGIN 都没输出）"; FAILED=1
+elif [[ "$C10_RC" == "42" ]]; then
+  echo "C10: PASS（多行失败逻辑已执行，退出 42）"
+else
+  echo "C10: FAIL（多行参数被截断：失败逻辑未执行却返回 $C10_RC）"; FAILED=1
+fi
+echo
+
+echo "--- C11 参数传递保真：空参数必须保留在原位置 ---"
+zsh "$RUN" -- python -c 'import sys; print(repr(sys.argv[1:]))' '' tail \
+  > "$SANDBOX/log/c11.out" 2>&1
+echo "runner_rc=$?"
+cat "$SANDBOX/log/c11.out"
+if grep -q "\['', 'tail'\]" "$SANDBOX/log/c11.out"; then
+  echo "C11: PASS"
+else
+  echo "C11: FAIL（空参数被吞掉）"; FAILED=1
+fi
+echo
+
+echo "--- C12 运行时镜像身份：digest 不符必须拒绝执行 ---"
+# 只核对不绑定的话，同名标签被重新构建后后续执行会静默换镜像。
+# 这里用一份 digest 被改坏的临时策略验证普通执行路径确实会拒绝。
+BAD_POLICY=$SANDBOX/bad-digest-policy.yaml
+python3 - "$HERE/mount-policy.yaml" "$BAD_POLICY" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+text = open(src).read()
+out = []
+for line in text.splitlines(True):
+    if line.strip().startswith("digest:"):
+        indent = line[:len(line) - len(line.lstrip())]
+        out.append("%sdigest: sha256:%s\n" % (indent, "0" * 64))
+    else:
+        out.append(line)
+open(dst, "w").write("".join(out))
+PY
+python3 "$POLICY_TOOL" run --policy "$BAD_POLICY" -- true \
+  > "$SANDBOX/log/c12.out" 2>&1
+C12_RC=$?
+cat "$SANDBOX/log/c12.out"
+echo "rc=$C12_RC"
+if [[ "$C12_RC" == "65" ]] && grep -q "IMAGE_DIGEST_MISMATCH" "$SANDBOX/log/c12.out"; then
+  echo "C12: PASS（普通执行路径按 digest 绑定，不符即拒）"
+else
+  echo "C12: FAIL（digest 不符仍可执行：rc=$C12_RC）"; FAILED=1
+fi
+echo
+
 echo "--- C9 仓库根覆盖应被拒绝（否则受保护清单整体失效） ---"
 QA_ISOLATION_REPO=/tmp zsh "$RUN" --rw qa/runs -- true \
   > "$SANDBOX/log/c9.out" 2>&1
@@ -279,7 +343,8 @@ echo
 
 echo "=== 总判定 ==="
 if [[ $FAILED -eq 0 ]]; then
-  echo "VERDICT: PASS（C0–C9 共 10 项，含镜像身份核对、阳性对照与两条回归反例）"
+  echo "VERDICT: PASS（C0–C12 共 13 项：镜像身份核对与运行时绑定、阳性对照、"
+  echo "         两条挂载绕过回归、两条参数保真回归）"
 else
   echo "VERDICT: NOT_PASS（存在 FAIL 或 VOID，逐条见上）"
 fi
