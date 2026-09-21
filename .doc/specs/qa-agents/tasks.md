@@ -198,10 +198,12 @@ item 8（工具级委派写入）仍未闭环，且不能由 shell 包装器代�
   - `isolation/mount-policy.yaml` + `mount_policy.py`：**可写范围由策略决定，不由调用参数
     决定**；`allowed_rw` 白名单 + `protected` 双重否决 + 镜像 digest + `network.mode`
   - `isolation/run-isolated.sh` 自己不拼挂载参数；拒绝 `QA_ISOLATION_REPO`/镜像覆盖
-  - `isolation/verify-isolation.sh`：**C0–C9 全 PASS**，含镜像身份核对、阳性对照、
-    两条绕过回归（C6 `--rw qa/baseline` / C7 `--rw ../outside`）
-  - 容器内跑完仓库全量测试 **292 项通过**；`isolation/` 自身 58 项单测
-  - 证据：`isolation-verify-c0-c9.txt`、`isolation-pytest-in-container.txt`、
+  - `isolation/verify-isolation.sh`：**C0–C12 全 13 项 PASS**，含镜像身份核对与运行时
+    digest 绑定、阳性对照、两条挂载绕过回归（C6 `--rw qa/baseline` / C7 `--rw ../outside`）、
+    两条参数保真回归（C10 多行命令 / C11 空参数）
+  - 容器内跑完仓库全量测试通过（307 passed + 4 skipped，skip 的是需要 podman 的端到端
+    用例，在宿主机实际执行）；`isolation/` 自身 74 项单测
+  - 证据：`isolation-verify-c0-c12.txt`、`isolation-pytest-in-container.txt`、
     `isolation-image-build.txt`
 - [x] 修复外部复核发现的包装器扩权漏洞（P1）：原实现接受任意 `--rw`，实测两条绕过成功
   （重新挂载受保护目录、父目录穿越）。已固化为 C6/C7 + `tests/test_mount_policy.py` 回归
@@ -233,9 +235,17 @@ item 8（工具级委派写入）仍未闭环，且不能由 shell 包装器代�
 - [ ] `qa-lead` 委派 `qa-executor` 的一次性审批如何处理需单独设计——委派会触发审批
   是已验证的行为事实，`trustedAgents` 在本 IDE 到底控制什么仍需补充探针，不能假设
   它能消除审批
-- [ ] `validate_agents.py` 依**实测白名单**校验（取 item 12 结论：`todo_list` 具体工具、
-  `knowledge` 不在注册表；`spec`/`context` 待补探针后再定）、
-  `allowedTools ⊆ tools`、只读角色不含 write/shell
+- [x] `validate_agents.py` 依**实测白名单**校验 — 2026-09-21 完成，47 项测试：
+  `todo_list` 为具体工具、`knowledge` 报 `TOOL_NOT_IN_REGISTRY`、`spec`/`context` 报
+  `TOOL_UNVERIFIED`；`allowedTools ⊆ tools`；只读角色不含 write/shell 且**不得用 deny**
+  表达（item 7 交集传播）；`permissions` 块必带；`effect: ask` 一律报错（headless/子代理下
+  等同 deny）；具备 write 的角色必须显式 allow 写路径且 deny 全部受保护前缀；
+  委派目标必须存在。每个拒绝码都有对应反例测试，首轮跑真实配置直接 PASS 时补的
+  —— 首次就全过是"校验器可能什么都没查"的信号
+- [x] 正式角色配置 `.kiro/agents/{qa-lead,qa-design,qa-executor,qa-reviewer}.json` — 2026-09-21：
+  `qa-lead` 用 tools 省略表达不写、`rules: []` 不用 deny；`qa-executor` 写路径显式 allow
+  且 deny 受保护路径与破坏性 shell 命令；提示词里写明"委派不是安全边界"（item 8）、
+  "FLAKY 不是根因"、"不发明阈值"、三态门禁
 - [ ] 实际越权尝试确认被拒（反例 1：缺工具调用记录或拒绝结果不算通过）
 - [ ] CI 复核（从可信执行的原始产物重新生成门禁输入）**保留作为独立防线**，但不能
   替代本任务的本地执行隔离——CI 复核发生在执行结束之后，防不住执行期间已经发生的破坏

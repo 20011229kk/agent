@@ -416,9 +416,9 @@ CI reviewer 按评审职责配置为只读，并显式授权所需读取与调�
 | `isolation/mount_policy.py` | 策略校验器（可单测）+ **执行入口**：校验通过后直接 `exec podman`；核对运行时镜像 digest 并按不可变 image id 启动 |
 | `isolation/run-isolated.sh` | 极薄转交层：不解析、不拼装，`"$@"` 原样交给 `mount_policy.py run`；拒绝 `QA_ISOLATION_REPO` 覆盖仓库根 |
 | `isolation/probes/net_probe.py` | 网络探针：只报事实（接口列表 / errno / 三态 verdict），不下判定 |
-| `isolation/verify-isolation.sh` | 边界验证 C0–C9，每条要求"命令确实执行 + 拒绝原文 + 宿主机 canary 前后哈希" |
+| `isolation/verify-isolation.sh` | 边界验证 C0–C12，每条要求"命令确实执行 + 拒绝原文 + 宿主机 canary 前后哈希" |
 
-**验证结果（`docs/probe-evidence/task3/results/isolation-verify-c0-c9.txt`）：C0–C9 全 PASS。**
+**验证结果（`docs/probe-evidence/task3/results/isolation-verify-c0-c12.txt`）：C0–C12 全 PASS。**
 
 | 检查 | 内容 |
 |---|---|

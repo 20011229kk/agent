@@ -35,12 +35,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: pip install --require-hashes -r requirements-ci.txt || pip install pyyaml pytest
-        # TODO(待办): 生成带哈希锁定的 requirements-ci.txt 后删掉 fallback。
-        #             当前 fallback 会拉未锁定版本，不符合依赖固定的要求。
+      - name: 装依赖（版本锁定，无 fallback）
+        run: pip install -r requirements-ci.txt
+        # 原先这里有 `|| pip install pyyaml pytest` 的 fallback，会拉未锁定版本 ——
+        # 判定器的运行环境每次都可能不同，门禁结论就失去可复现性，已删除。
+        # requirements-ci.txt 目前只锁版本号、**未锁哈希**，补齐方式见该文件注释。
 
       - name: 结构校验
         run: python3 scripts/validate_spec.py --root .
+
+      - name: 角色配置校验
+        run: python3 scripts/validate_agents.py --root .
 
       - name: 判定器单测
         run: python3 -m pytest tests/ -q
@@ -100,7 +105,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: pip install pyyaml
+      - run: pip install -r requirements-ci.txt
 
       - name: 下载原始产物
         uses: actions/download-artifact@v4
@@ -127,13 +132,38 @@ jobs:
       - name: 从原始产物重建门禁输入
         run: |
           set -euo pipefail
-          # TODO(待用户输入): 依赖真实框架的原生报告格式。
-          #   这一步要把 raw/junit.xml（或等价物）转成 run.json，并绑定：
-          #   candidate_sha / target_sha / policy_version / baseline_version /
-          #   baseline_hash / 执行范围。配置标识必须脱敏，保留 traceId。
-          #   转换脚本本身属受保护路径（改它等于改证据来源）。
-          echo "TODO: scripts/rebuild_run_json.py --raw qa/runs/*/raw --out qa/runs/<id>/run.json"
-          exit 1
+          # 重建脚本已实现（scripts/rebuild_run_json.py，受保护路径：改它等于改证据来源）。
+          # 取受保护版本的那一份，不用候选工作副本里的版本。
+          RUN_ID="${CANDIDATE_SHA:0:12}"
+          RAW_DIR=$(find qa/runs -type d -name raw | head -1 || true)
+          if [ -z "$RAW_DIR" ]; then
+            echo "原始产物缺失 → 证据不完整。门禁应判 INCOMPLETE。" >&2
+            echo "不要用候选分支里的 run.json 补位。" >&2
+            exit 1
+          fi
+          # 需求基线的版本与哈希必须取**受保护分支上已确认的那一份**。
+          # qa/baseline 为空时这里会失败，那是正确行为：没有分母就没有覆盖率，
+          # 应当是 INCOMPLETE，而不是按"矩阵里有什么就算什么"放行。
+          if ! git cat-file -e "$TARGET_SHA:qa/baseline" 2>/dev/null; then
+            echo "受保护分支上没有 qa/baseline → 覆盖率无分母。" >&2
+            echo "这是待交付的数据缺口（需求基线由人维护），不是脚本缺失。" >&2
+            exit 1
+          fi
+          BASELINE_VERSION=$(git rev-parse "$TARGET_SHA:qa/baseline")
+          mkdir -p .gate-baseline
+          git archive "$TARGET_SHA" qa/baseline | tar -x -C .gate-baseline
+          BASELINE_HASH=$(find .gate-baseline/qa/baseline -type f -print0 \
+            | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -d' ' -f1)
+          mkdir -p "qa/runs/$RUN_ID"
+          python3 .gate-policy/scripts/rebuild_run_json.py \
+            --raw "$RAW_DIR" \
+            --out "qa/runs/$RUN_ID/run.json" \
+            --run-id "$RUN_ID" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --target-sha "$TARGET_SHA" \
+            --policy-version "$POLICY_VERSION" \
+            --baseline-version "$BASELINE_VERSION" \
+            --baseline-hash "$BASELINE_HASH"
 
       - name: 追溯与覆盖
         run: |
@@ -179,9 +209,18 @@ jobs:
 # 尚未落地的部分（不要当成已实现）
 # ---------------------------------------------------------------------------
 #
-# · run-tests 与"从原始产物重建门禁输入"两步都是 `exit 1` 占位，需要真实仓库的
-#   框架与报告格式才能填。填之前这份 workflow 会失败，这是故意的 ——
-#   一个"能跑过但什么都没验证"的门禁比没有门禁更危险。
+# · 「从原始产物重建门禁输入」**已实现**：scripts/rebuild_run_json.py
+#   （JUnit XML → run.json，六字段版本绑定缺一即拒，脱敏 + 截断，
+#   解析失败或无 attempt 标记 incomplete）。该步骤现在失败只会因为两种**数据**原因：
+#   没有原始产物、或受保护分支上没有 qa/baseline。两者都应当导致 INCOMPLETE。
+#
+# · run-tests 的 collect / 执行两步仍是 `exit 1` 占位，且是**真正的待输入**：
+#   需要被测项目的框架、启动命令与原生报告格式。填之前这份 workflow 会失败，
+#   这是故意的 —— 一个"能跑过但什么都没验证"的门禁比没有门禁更危险。
+#
+# · 未支持的原生报告格式：JSON report / TRX / TAP。遇到时应扩展 rebuild_run_json.py
+#   并补测试，**不要**在 CI 里临时转换 —— 临时脚本不在受保护路径内，
+#   等于把证据来源搬到了不受保护的地方。
 #
 # · 评审链路（review-verdict.json 由 CI 评审执行器产出）没有写在这里，
 #   因为它依赖"CI 能否跑 agent"的答案。若不能，review_mode 保持 manual，

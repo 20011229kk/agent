@@ -1,0 +1,24 @@
+# CI 依赖，版本锁定。
+#
+# 为什么不再用 `pip install pyyaml pytest` 做 fallback：那条 fallback 会拉未锁定版本，
+# 等于判定器的运行环境每次都可能不同，门禁结论就失去了可复现性。
+#
+# 已锁：版本号。
+# 未锁（已知缺口，别当成已解决）：**没有哈希锁定**（`--require-hashes`）。
+# 生成哈希需要联网取包摘要，且要为所有传递依赖一并生成；补齐方式：
+#   pip download -r requirements-ci.txt -d /tmp/wheels
+#   pip hash /tmp/wheels/*            # 把结果写成 --hash= 行
+# 补齐前 CI 里**不要**加 --require-hashes，否则安装必然失败。
+#
+# 版本选取依据：与本机既有工具链一致（系统 python3 自带 pytest 8.4.2 / PyYAML 6.0.2），
+# 避免容器内外测试行为不一致造成假绿/假红。传递依赖同样显式列出，
+# 否则同一份文件在不同日期会装出不同内容。
+
+pytest==8.4.2
+PyYAML==6.0.2
+
+# pytest 的传递依赖
+iniconfig==2.3.0
+packaging==26.3
+pluggy==1.6.0
+pygments==2.21.0

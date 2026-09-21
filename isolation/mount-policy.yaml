@@ -25,6 +25,7 @@ allowed_rw:
 # 与 docs/protected-paths.md 的受保护清单对齐；父目录同样拒绝，
 # 因为把 qa/ 挂成可写等于把 qa/baseline 一起挂成可写。
 protected:
+  - .kiro          # 正式角色配置：改它等于改角色权限与提示词
   - qa/baseline
   - qa/plan
   - qa/metrics

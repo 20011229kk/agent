@@ -388,3 +388,81 @@ OS 进程"。另外三处测量问题一并修掉：
 对象弱**。上一轮补的 58 项测试全在验证规划器的内存输出，没有一项跨越 shell 边界，所以
 "292 项通过"对新缺陷完全没有约束力。**新增的传输层必须有端到端往返测试**，
 断言的对象是"最终执行的那个进程收到了什么"，不是"我打算传什么"。
+
+### 交付验收判 INCOMPLETE：补齐四项缺失实现（2026-09-21）
+
+第三方验收核对 `6e49f1c`，结论是"隔离包装器通过，QA Agent 整体 INCOMPLETE"。
+五个阻断项里有四项是**缺失的实现**，本轮补齐；余下的强制边界与平台配置仍未闭环。
+
+**新增：正式角色配置 `.kiro/agents/*.json`（四个角色）**
+
+此前只有一次性探针配置，没有正式角色，所以"角色隔离"根本没有验收对象。四份配置的每条写法
+都对应一条实测结论：`qa-lead` 用 `tools` 省略表达"不写"且 `rules: []`（不能用 deny——
+item 7 实测父代理 deny 按交集传播，会把子代理该有的写权限一起禁掉）；`qa-executor` 写路径
+显式 allow（`ask` 在 headless/子代理下等同 deny）、deny 全部受保护路径与破坏性 shell 命令；
+所有配置都带 `permissions` 块（缺它且含 CLI-only 字段的配置被 IDE 静默跳过）。
+
+提示词里固化了几条容易被模型自己绕开的约束：**委派不是安全边界**（item 8）、
+**FLAKY 不是根因**、不发明阈值、三态门禁、证据强度分级。
+
+**新增：`scripts/validate_agents.py`（47 项测试）**
+
+校验上述写法约束，拒绝码覆盖 `TOOL_NOT_IN_REGISTRY`（`knowledge`）、`TOOL_UNVERIFIED`
+（`spec`/`context`，item 12 未能验证匹配结果）、`READONLY_ROLE_USES_DENY`、
+`RULE_EFFECT_ASK`、`WRITE_PATHS_NOT_EXPLICIT`、`PROTECTED_PATH_NOT_DENIED`、
+`ALLOW_INSIDE_PROTECTED`、`PERMISSIONS_BLOCK_MISSING`、`SUBAGENT_TARGET_MISSING` 等。
+
+写测试时逮到自己一个缺陷：非对象的 rule 项会让后续逻辑抛 `AttributeError`——校验器自己崩掉
+比漏报更糟，因为调用方看到的是异常而不是判定。已修。另外首轮跑真实配置直接 PASS，
+这是"校验器可能什么都没查"的信号，所以每个拒绝码都补了会触发它的反例。
+
+**新增：`scripts/rebuild_run_json.py`（32 项测试）**
+
+门禁证据链上一直缺的那一环：从框架原生报告（JUnit XML）重建 `run.json`。选 JUnit XML 是为了
+不假设被测项目用哪个框架。关键判据：
+
+- 六个版本绑定字段缺任何一个（包括传空字符串）直接拒绝生成，**不填空值**——
+  `gate_check` 侧实测过"字段缺失反而跳过核对"这类误放行
+- `skipped` 既不记为 failed 也不记为 passed；同时带 failure/skipped 时按更坏的记
+- 原始报告解析失败或没有任何 attempt → `incomplete: true`，不得因为"已解析部分都 passed"放行
+- message 做敏感信息脱敏（password/token/api_key/连接串/Authorization）并截断
+
+未支持 JSON report / TRX / TAP，遇到应扩展本脚本并补测试，**不要**在 CI 里临时转换——
+临时脚本不在受保护路径内，等于把证据来源搬到不受保护的地方。
+
+**新增：`requirements-ci.txt`，并删掉 CI 里的未锁版本 fallback**
+
+原先是 `pip install --require-hashes -r requirements-ci.txt || pip install pyyaml pytest`，
+而那个文件不存在，所以每次都走 fallback 拉未锁定版本——判定器的运行环境每次都可能不同。
+现在锁版本（含传递依赖），并明确标注**未锁哈希**及补齐方式；CI 里不再有 fallback。
+
+**CI workflow：重建步骤从 `exit 1` 占位变为真实实现**
+
+`gate` job 现在真的调用 `rebuild_run_json.py`，并从**受保护分支**取 `qa/baseline` 计算
+`baseline_version`/`baseline_hash`。该步骤现在只会因两种**数据**原因失败：没有原始产物、
+或受保护分支上没有需求基线——两者都应导致 INCOMPLETE。`run-tests` 的 collect/执行两步仍是
+占位，且是真正的待输入（需要被测项目的框架与报告格式）。
+
+`self-check` 增加角色配置校验；`make check` 现在是"结构校验 + 角色配置校验 + 单测"，
+另加 `make validate-agents`、`make isolation-verify`。
+
+**受保护路径清单补齐**：`.kiro/**`（角色配置）、`scripts/validate_agents.py`、
+`scripts/rebuild_run_json.py`、`requirements-ci.txt` 入列；`isolation/mount-policy.yaml`
+的 `protected` 同步加 `.kiro`。
+
+**文档同步（验收报告附注的漂移项）**：`isolation-verify-c0-c9.txt` → `-c0-c12.txt`，
+旧的 292 项数字改为当前 C0–C12 与 307+4skip 的表述。
+
+**验证**：`make check` = 181 项结构校验 PASS + 角色配置校验 PASS + **390 项测试通过**。
+
+**仍未闭环（验收报告的阻断项，本轮没动的部分）**
+
+1. **强制执行边界**：仍无强制入口；策略与校验器在宿主上仍可被改写。这是护栏，不是边界。
+2. **item 8 完整链路**：正式角色配置现在存在了，但"委派路径下权限是否生效"需要在 IDE 里
+   实测，agent 自己测不了自己的权限层。
+3. **真实测试接入**：`qa/baseline`、`qa/plan` 仍无正式数据（需求基线由人维护，不能由 agent
+   生成，否则分母失去意义）；collect/执行两步待被测项目输入。
+4. **平台门禁**：`main.protected=false`、有效 Rulesets 为空、CODEOWNERS 仍是占位符。
+   这三项需要仓库管理员权限，我做不了。
+5. **补充证据**：写入 PID 归属需 `sudo` 级内核追踪；原始采样仍只在本地 `/tmp`，
+   长期受控 artifact 存储未交付。

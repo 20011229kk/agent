@@ -47,7 +47,10 @@ L1 单独不足；L2 未落地前，本体系**不得**宣称"权限已自保护
 | `scripts/validate_*.py` | 校验器被弱化则配置约束失效 | `target_sha` |
 | CI 配置、`Makefile` | 改 required check 即可跳过门禁 | `target_sha` + 平台保护设置 |
 | `CODEOWNERS` | 改归属即可自我授权 | `target_sha` + 平台保护设置 |
-| `.kiro/agents/**` | 实测"永久询问"退化为静默允许，平台不保护 | `target_sha` |
+| `.kiro/agents/**` | 正式角色配置（权限 + 提示词）。实测"永久询问"退化为静默允许，平台不保护，因此只能靠审批 | `target_sha` |
+| `scripts/validate_agents.py` | 角色配置校验器；弱化它等于让角色写法约束失效 | `target_sha` |
+| `scripts/rebuild_run_json.py` | 从原始报告重建门禁输入。改它等于改证据来源 | `target_sha` |
+| `requirements-ci.txt` | 判定器的运行环境；换版本等于换判定行为 | `target_sha` |
 | `steering/**` | 实测无任何硬保护 | `target_sha` |
 | `.doc/specs/**` | 验收口径与任务状态来源 | `target_sha` |
 | `docs/capability-matrix.md` | 决定哪些设计前提成立 | `target_sha` |

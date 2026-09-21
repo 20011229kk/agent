@@ -10,20 +10,30 @@
 PY := /usr/bin/python3
 ROOT := $(shell pwd)
 
-.PHONY: help check validate test gate clean
+.PHONY: help check validate validate-agents test gate isolation-verify clean
 
 help:
-	@echo "make check     结构校验 + 全部单测（提交前跑这个）"
-	@echo "make validate  只跑结构校验"
-	@echo "make test      只跑单测"
-	@echo "make gate      本地门禁自检（非门禁，仅参考）"
-	@echo "make clean     清理临时产物"
+	@echo "make check             结构校验 + 角色配置校验 + 全部单测（提交前跑这个）"
+	@echo "make validate          只跑结构校验"
+	@echo "make validate-agents   只校验 .kiro/agents/*.json"
+	@echo "make test              只跑单测"
+	@echo "make gate              本地门禁自检（非门禁，仅参考）"
+	@echo "make isolation-verify  隔离边界验证 C0–C12（需要 podman）"
+	@echo "make clean             清理临时产物"
 
-check: validate test
+check: validate validate-agents test
 
 validate:
 	@echo "==> validate_spec"
 	@$(PY) scripts/validate_spec.py --root $(ROOT)
+
+validate-agents:
+	@echo "==> validate_agents"
+	@$(PY) scripts/validate_agents.py --root $(ROOT)
+
+isolation-verify:
+	@echo "==> verify-isolation (C0–C12)"
+	@zsh isolation/verify-isolation.sh
 
 test:
 	@echo "==> pytest"
