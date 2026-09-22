@@ -551,3 +551,86 @@ def test_plain_var_occurrence_table_directly():
     script = r'''prefix$A v1$B _$C :$D $E \$F $$G '$H' "$I"'''
     got = [name for _pos, name in cwe._plain_var_occurrences(script)]
     assert got == ["A", "B", "C", "D", "E", "I"], got
+
+
+# --------------------------------------------------------------------------
+# 第九轮复核：braced 状态事件必须与普通变量共用词法上下文
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("literal_line", [
+    '# ${X:=ok}',
+    "printf '%s' '${X:=ok}'",
+    r'printf "%s" "\${X:=ok}"',
+])
+def test_R_literal_braced_assignment_does_not_define_variable(tmp_path, literal_line):
+    """注释/单引号/转义中的 `${X:=ok}` 只是文本，不能给后续 `$X` 提供赋值证据。
+
+    旧实现只有普通 `$VAR` 使用词法 scanner；BRACED_PARAM 仍 finditer 原始全文，
+    三类字面量都会虚假生成 assign 事件，检查器零问题，真实 Bash 却因 X 未绑定失败。
+    """
+    script = literal_line + '\nprintf "%s" "$X"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    issues = cwe.check_workflow(wf)
+    assert names(issues) == ["X"], (literal_line, [str(i) for i in issues])
+    assert run_bash(script).returncode != 0
+
+
+def test_real_braced_assignment_defines_variable_positive_control(tmp_path):
+    """真正执行 `${X:=ok}` 后再读 X，检查器与 Bash 都通过，输出 okok。"""
+    script = 'printf "%s" "${X:=ok}"\nprintf "%s" "$X"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+    proc = run_bash(script)
+    assert proc.returncode == 0
+    assert proc.stdout == b"okok"
+
+
+def test_comment_braced_use_is_not_reported(tmp_path):
+    """同一词法上下文也适用于 braced use，不只是 := 状态变更。"""
+    script = '# ${UNSET}\nprintf ok'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+    assert run_bash(script).returncode == 0
+
+
+def test_single_quoted_braced_use_is_not_reported(tmp_path):
+    script = "printf '%s' '${UNSET}'"
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+    proc = run_bash(script)
+    assert proc.returncode == 0 and proc.stdout == b"${UNSET}"
+
+
+def test_escaped_braced_use_is_not_reported(tmp_path):
+    script = r'printf "%s" "\${UNSET}"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+    proc = run_bash(script)
+    assert proc.returncode == 0 and proc.stdout == b"${UNSET}"
+
+
+def test_double_quoted_braced_use_is_reported(tmp_path):
+    script = 'printf "%s" "${UNSET}"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert names(cwe.check_workflow(wf)) == ["UNSET"]
+    assert run_bash(script).returncode != 0
+
+
+def test_literal_nested_expansion_does_not_raise_unsupported(tmp_path):
+    """注释里的嵌套 `${...}` 也不得生成 UNSUPPORTED；它根本不是可执行展开。"""
+    script = '# ${X:-${Y:-z}}\nprintf ok'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+
+
+def test_active_dollar_positions_shared_by_plain_and_braced():
+    script = r'''# ${A:=x}
+'${B:=x}' "\${C:=x}" "${D:=x}" prefix$E'''
+    active = cwe._active_dollar_positions(script)
+    active_text = [script[p:p + 3] for p in active]
+    assert "${D" in active_text
+    assert "$E" in [script[p:p + 2] for p in active]
+    assert "${A" not in active_text
+    assert "${B" not in active_text
+    assert "${C" not in active_text

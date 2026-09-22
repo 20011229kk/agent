@@ -138,20 +138,14 @@ def _command_end(script: str, start: int) -> int:
     return min(positions) if positions else len(script)
 
 
-def _plain_var_occurrences(script: str):
-    """返回普通 `$VAR` 的 `(位置, 名称)`，做有限 shell 词法区分。
+def _active_dollar_positions(script: str):
+    """返回处于可执行 shell 词法上下文中的 `$` 位置。
 
-    支持并有真实 Bash 对照的边界：
-    - `$` 前可紧贴任意普通字面量：`a$Y`、`1$Y`、`_$Y` 都展开 Y
-    - 单引号内 `$Y` 是文本；双引号内仍展开
-    - 奇数个反斜杠转义 `$`，偶数个反斜杠后 `$` 仍展开
-    - `$$Y` 是 PID 特殊参数后接字面 Y，不是变量 Y
-    - `${{ ... }}` 是 GitHub Actions 表达式，整体跳过
-    - `${X:-$Y}` 中继续扫描 RHS 的普通 `$Y`
-
-    这不是完整 shell lexer；命令替换、here-doc、ANSI-C 引号等仍在文档声明的未建模范围。
+    这是普通 `$VAR`、braced `${...}` 和嵌套展开拒绝的**唯一词法上下文来源**。
+    三类事件若各自扫描原始全文，就会出现组合漏洞：普通变量知道注释/引号/转义，
+    braced `:=` 却不知道，于是注释或字面量里的 `${X:=ok}` 会虚假改变后续状态。
     """
-    out = []
+    positions = []
     i = 0
     quote = None  # None | "single" | "double"
     n = len(script)
@@ -176,8 +170,7 @@ def _plain_var_occurrences(script: str):
 
         if c == "\\":
             # 未加引号：反斜杠转义任意下一字符。
-            # 双引号内：只转义 $, `, ", \\ 与换行；其他字符前的反斜杠保留，
-            # 下一字符仍按正常词法处理。
+            # 双引号内：只转义 $, `, ", \\ 与换行。
             if i + 1 < n and (quote is None or script[i + 1] in '$`"\\\n'):
                 i += 2
             else:
@@ -195,37 +188,48 @@ def _plain_var_occurrences(script: str):
             i += 1
             continue
 
-        # GitHub Actions 表达式不是 shell 参数展开
+        # GitHub Actions 表达式不是 shell 参数展开，整体跳过
         if script.startswith("${{", i):
             end = script.find("}}", i + 3)
             i = n if end < 0 else end + 2
             continue
 
-        if i + 1 >= n:
-            i += 1
+        positions.append(i)
+        if i + 1 < n and script[i + 1] == "$":
+            # $$ 是 PID 特殊参数；第二个 $ 不是新展开起点
+            i += 2
+        else:
+            # 对 `${...}` 只前进过 `${`，不跳过整个范围：RHS 里的 `$Y` 也要成为 active
+            i += 2 if i + 1 < n and script[i + 1] == "{" else 1
+
+    return positions
+
+
+def _plain_var_occurrences(script: str):
+    """返回普通 `$VAR` 的 `(位置, 名称)`，做有限 shell 词法区分。
+
+    支持并有真实 Bash 对照的边界：
+    - `$` 前可紧贴任意普通字面量：`a$Y`、`1$Y`、`_$Y` 都展开 Y
+    - 单引号内 `$Y` 是文本；双引号内仍展开
+    - 奇数个反斜杠转义 `$`，偶数个反斜杠后 `$` 仍展开
+    - `$$Y` 是 PID 特殊参数后接字面 Y，不是变量 Y
+    - `${{ ... }}` 是 GitHub Actions 表达式，整体跳过
+    - `${X:-$Y}` 中继续扫描 RHS 的普通 `$Y`
+
+    这不是完整 shell lexer；命令替换、here-doc、ANSI-C 引号等仍在文档声明的未建模范围。
+    """
+    out = []
+    for i in _active_dollar_positions(script):
+        if i + 1 >= len(script):
             continue
         nxt = script[i + 1]
-
-        if nxt == "$":
-            # $$ 是当前 shell PID；其后的 Y 没有第二个 $，只是字面量
-            i += 2
+        if not VAR_START.fullmatch(nxt):
+            # ${...} / $$ / $1 / $? / $@ / $(...) 等不是普通命名变量
             continue
-        if nxt == "{":
-            # 外层 braced 参数由 BRACED_PARAM 处理，但不要跳过整个范围：
-            # RHS 里可能还有需要检查的普通 `$Y`
-            i += 2
-            continue
-        if VAR_START.fullmatch(nxt):
-            j = i + 2
-            while j < n and VAR_CHAR.fullmatch(script[j]):
-                j += 1
-            out.append((i, script[i + 1:j]))
-            i = j
-            continue
-
-        # $1 / $? / $@ / $* / $! / $- / $(...) 等不是普通命名变量
-        i += 2
-
+        j = i + 2
+        while j < len(script) and VAR_CHAR.fullmatch(script[j]):
+            j += 1
+        out.append((i, script[i + 1:j]))
     return out
 
 
@@ -236,7 +240,9 @@ def _unsupported_expansions(script: str):
     内层引用，不如明确返回 ENV_EXPANSION_UNSUPPORTED。普通 RHS `$Y` 已支持；
     需要嵌套 `${Y:-...}` 时应使用真实 shell 检查或后续引入词法解析器。
     """
-    return [m.start() for m in re.finditer(r"\$\{(?!\{)[^}]*\$\{(?!\{)", script)]
+    active = set(_active_dollar_positions(script))
+    return [m.start() for m in re.finditer(
+        r"\$\{(?!\{)[^}]*\$\{(?!\{)", script) if m.start() in active]
 
 
 def _script_events(script: str):
@@ -246,10 +252,14 @@ def _script_events(script: str):
     """
     events = []
 
-    # `${VAR...}`：每一处引用独立判断。安全默认值不会保护后续同名引用。
-    # 默认值 RHS 里的普通 `$Y` 由后面的 USE_PLAIN **照常收集**；不能把整个
-    # `${...}` 范围屏蔽掉，否则 `${X:-$Y}` 会漏掉 Y、`${X:=$X}` 会漏掉 RHS 的 X。
+    active_dollars = set(_active_dollar_positions(script))
+
+    # `${VAR...}`：每一处引用独立判断，且必须处于与普通变量相同的可执行词法上下文。
+    # 注释、单引号、转义中的 `${X:=ok}` 只是字面量，绝不能生成 assign 事件。
+    # 默认值 RHS 里的普通 `$Y` 由 `_plain_var_occurrences` 照常收集。
     for m in BRACED_PARAM.finditer(script):
+        if m.start() not in active_dollars:
+            continue
         name, tail = m.group(1), m.group(2)
         op = _safe_param_operator(tail)
         if op is None:

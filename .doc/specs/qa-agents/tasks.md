@@ -312,6 +312,9 @@ item 8（工具级委派写入）仍未闭环，且不能由 shell 包装器代�
       `prefix$Y`/`v1$Y`/`_$Y`/分隔符/无前缀均检查 Y；有限 scanner 区分奇偶反斜杠、
       `$$Y`、单/双引号、`${{ }}`、简单注释与 `$Ysuffix`/`${Y}suffix`。所有边界均有
       真实 `/bin/bash -c 'set -eu'` 对照
+- [x] braced 状态事件统一词法上下文（第九轮复核 P2）：普通 `$VAR`、`${...}` use/assign、
+      嵌套 UNSUPPORTED 均消费 `_active_dollar_positions`；注释、单引号、转义中的
+      `${X:=ok}` 不得虚假定义后续 X，真实 `${X:=ok}` 阳性对照输出 `okok`
 - [ ] **CI 证据来源升级为可信（当前必然 INCOMPLETE，需要外部输入）**：
   - [ ] 执行层随原始产物上传 collect 清单（`kind: trusted_ci` + ref）
   - [ ] 缺陷记录改为从跟踪系统导出（`kind: tracker` + 查询/导出 ref）—— 需用户指定系统
