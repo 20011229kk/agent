@@ -92,6 +92,10 @@
 - **IF** 缺陷文件在导出后被改为 `closed: true`，**THEN** 删除或清空清单摘要
   **SHALL NOT** 使 `DEFECT_RECORD_MODIFIED` 消失并得到 PASS；缺摘要本身 SHALL 产生
   `DEFECT_EXPORT_SHA256_INVALID`。
+- workflow 普通命名变量 SHALL 从 `$` 本身识别，**SHALL NOT** 因 `$` 前紧贴字母、数字、
+  下划线或其他字面量而漏报：`prefix$Y`、`v1$Y`、`_$Y` 与 `$Y` 均展开 Y。
+  词法扫描 SHALL 区分奇数反斜杠转义的 `\$Y`、`$$Y` PID 特殊参数、单引号内文本与
+  双引号内展开；`$Ysuffix` SHALL 识别为变量 `Ysuffix`，`${Y}suffix` 才是 Y 后接字面量。
 - workflow 变量静态检查 SHALL 按源码位置处理受支持的线性语法：未来赋值
   **SHALL NOT** 提前满足当前引用；`${X:-fallback}` 只保护当前展开，**SHALL NOT**
   使后续裸 `$X` 可见；`${X:=fallback}` 可在**右侧引用检查完成后**使后续引用可见。

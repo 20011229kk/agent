@@ -73,7 +73,10 @@ BUILTIN = {
 # `${X:-fallback}` 只保护这一处；后面的 `$X` 仍然是不安全引用。
 BRACED_PARAM = re.compile(
     r"(?<!\$)\$\{(?!\{)([A-Za-z_][A-Za-z0-9_]*)([^}]*)\}")
-USE_PLAIN = re.compile(r"(?<![\$\w])\$([A-Za-z_][A-Za-z0-9_]*)")
+# `$VAR` 不能靠"前一字符不是 \w"判断：`prefix$Y`、`v1$Y`、`_$Y` 中的 Y
+# 都是合法展开。普通变量改由 `_plain_var_occurrences` 从 `$` 本身做有限词法扫描。
+VAR_START = re.compile(r"[A-Za-z_]")
+VAR_CHAR = re.compile(r"[A-Za-z0-9_]")
 EXPR_ENV = re.compile(r"\$\{\{\s*env\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 # 受 `set -u` 保护的参数展开操作符。#/%/替换等要求变量已经定义，不在此列。
@@ -135,6 +138,97 @@ def _command_end(script: str, start: int) -> int:
     return min(positions) if positions else len(script)
 
 
+def _plain_var_occurrences(script: str):
+    """返回普通 `$VAR` 的 `(位置, 名称)`，做有限 shell 词法区分。
+
+    支持并有真实 Bash 对照的边界：
+    - `$` 前可紧贴任意普通字面量：`a$Y`、`1$Y`、`_$Y` 都展开 Y
+    - 单引号内 `$Y` 是文本；双引号内仍展开
+    - 奇数个反斜杠转义 `$`，偶数个反斜杠后 `$` 仍展开
+    - `$$Y` 是 PID 特殊参数后接字面 Y，不是变量 Y
+    - `${{ ... }}` 是 GitHub Actions 表达式，整体跳过
+    - `${X:-$Y}` 中继续扫描 RHS 的普通 `$Y`
+
+    这不是完整 shell lexer；命令替换、here-doc、ANSI-C 引号等仍在文档声明的未建模范围。
+    """
+    out = []
+    i = 0
+    quote = None  # None | "single" | "double"
+    n = len(script)
+
+    while i < n:
+        c = script[i]
+
+        if quote == "single":
+            if c == "'":
+                quote = None
+            i += 1
+            continue
+
+        if c == "'" and quote is None:
+            quote = "single"
+            i += 1
+            continue
+        if c == '"':
+            quote = None if quote == "double" else "double"
+            i += 1
+            continue
+
+        if c == "\\":
+            # 未加引号：反斜杠转义任意下一字符。
+            # 双引号内：只转义 $, `, ", \\ 与换行；其他字符前的反斜杠保留，
+            # 下一字符仍按正常词法处理。
+            if i + 1 < n and (quote is None or script[i + 1] in '$`"\\\n'):
+                i += 2
+            else:
+                i += 1
+            continue
+
+        # 简单注释识别：未加引号且 # 位于词首时，跳到行尾。
+        if c == "#" and quote is None and (
+                i == 0 or script[i - 1].isspace() or script[i - 1] in ";|&("):
+            newline = script.find("\n", i)
+            i = n if newline < 0 else newline + 1
+            continue
+
+        if c != "$":
+            i += 1
+            continue
+
+        # GitHub Actions 表达式不是 shell 参数展开
+        if script.startswith("${{", i):
+            end = script.find("}}", i + 3)
+            i = n if end < 0 else end + 2
+            continue
+
+        if i + 1 >= n:
+            i += 1
+            continue
+        nxt = script[i + 1]
+
+        if nxt == "$":
+            # $$ 是当前 shell PID；其后的 Y 没有第二个 $，只是字面量
+            i += 2
+            continue
+        if nxt == "{":
+            # 外层 braced 参数由 BRACED_PARAM 处理，但不要跳过整个范围：
+            # RHS 里可能还有需要检查的普通 `$Y`
+            i += 2
+            continue
+        if VAR_START.fullmatch(nxt):
+            j = i + 2
+            while j < n and VAR_CHAR.fullmatch(script[j]):
+                j += 1
+            out.append((i, script[i + 1:j]))
+            i = j
+            continue
+
+        # $1 / $? / $@ / $* / $! / $- / $(...) 等不是普通命名变量
+        i += 2
+
+    return out
+
+
 def _unsupported_expansions(script: str):
     """返回无法可靠建模的嵌套 `${...${...}...}` 位置。
 
@@ -164,15 +258,10 @@ def _script_events(script: str):
             # `${X:=v}` 当前引用本身受保护，并在展开完成后赋值
             events.append((m.end(), 1, "assign", name))
 
-    # `$VAR`：只跳过位于 `${{...}}` Actions 表达式内部的片段。
-    # 位于 `${X:-$Y}` 里的 `$Y` **不能跳过**：外层 `:-` 只保护 X，不保护 Y。
-    expression_ranges = [(m.start(), m.end()) for m in
-                         re.finditer(r"\$\{\{.*?\}\}", script, re.S)]
-    for m in USE_PLAIN.finditer(script):
-        pos = m.start()
-        if any(a <= pos < b for a, b in expression_ranges):
-            continue
-        events.append((pos, 0, "use", m.group(1)))
+    # `$VAR`：从 `$` 本身识别，前面紧贴字母/数字/下划线也仍是变量展开。
+    # scanner 内部区分 Actions 表达式、转义美元、$$ 与单/双引号。
+    for pos, name in _plain_var_occurrences(script):
+        events.append((pos, 0, "use", name))
 
     # 普通赋值在简单命令结束后才视为生效（RHS 可能引用同名变量）
     for m in ASSIGN_EVENT.finditer(script):

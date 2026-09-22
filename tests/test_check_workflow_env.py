@@ -428,3 +428,126 @@ def test_unsupported_issue_reports_line(tmp_path):
               if i.code == "ENV_EXPANSION_UNSUPPORTED"]
     assert len(issues) == 1
     assert "第 2 行" in issues[0].detail
+
+
+# --------------------------------------------------------------------------
+# 第八轮复核：普通 $VAR 前紧贴字面量仍必须识别
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("prefix", ["prefix", "v1", "_", "-", ":", "", "/tmp/"])
+def test_plain_variable_expands_after_literal_prefix(tmp_path, prefix):
+    """$ 前紧贴字母、数字、下划线、分隔符或无前缀，都不改变 `$Y` 的词法含义。"""
+    script = 'printf "%s" "${X:-' + prefix + '$Y}"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert names(cwe.check_workflow(wf)) == ["Y"], prefix
+    proc = run_bash(script)
+    assert proc.returncode != 0, prefix
+    assert b"Y" in proc.stderr or b"unbound" in proc.stderr
+
+
+@pytest.mark.parametrize("prefix", ["prefix", "v1", "_"])
+def test_colon_equals_self_reference_after_literal_is_checked(tmp_path, prefix):
+    """`${X:=prefix$X}`：字面前缀不保护右侧自身引用。"""
+    script = 'printf "%s" "${X:=' + prefix + '$X}"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert names(cwe.check_workflow(wf)) == ["X"]
+    assert run_bash(script).returncode != 0
+
+
+def test_prefixed_plain_variable_positive_control(tmp_path):
+    script = 'Y=ok\nprintf "%s" "${X:-prefix$Y}"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+    proc = run_bash(script)
+    assert proc.returncode == 0
+    assert proc.stdout == b"prefixok"
+
+
+def test_plain_var_scanner_reports_full_shell_name(tmp_path):
+    """`$Ysuffix` 是变量 Ysuffix，不是变量 Y 后接 suffix。"""
+    script = 'Y=ok\nprintf "%s" "$Ysuffix"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert names(cwe.check_workflow(wf)) == ["Ysuffix"]
+    assert run_bash(script).returncode != 0
+
+
+def test_braces_separate_variable_from_suffix(tmp_path):
+    """`${Y}suffix` 才是变量 Y 后接字面 suffix。"""
+    script = 'Y=ok\nprintf "%s" "${Y}suffix"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+    proc = run_bash(script)
+    assert proc.returncode == 0 and proc.stdout == b"oksuffix"
+
+
+# ---- 不应被解释为普通命名变量的形式 ----
+
+def test_escaped_dollar_is_literal_not_variable(tmp_path):
+    script = r'printf "%s" "\$Y"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+    proc = run_bash(script)
+    assert proc.returncode == 0 and proc.stdout == b"$Y"
+
+
+def test_pid_expansion_followed_by_letter_is_not_named_variable(tmp_path):
+    """`$$Y` 是 PID + 字面 Y，不是变量 Y。"""
+    script = 'printf "%s" "$$Y"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+    proc = run_bash(script)
+    assert proc.returncode == 0
+    assert proc.stdout.endswith(b"Y") and proc.stdout[:-1].isdigit()
+
+
+def test_single_quoted_dollar_is_literal(tmp_path):
+    script = "printf '%s' '$Y'"
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+    proc = run_bash(script)
+    assert proc.returncode == 0 and proc.stdout == b"$Y"
+
+
+def test_double_quoted_dollar_is_expanded(tmp_path):
+    script = 'printf "%s" "$Y"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert names(cwe.check_workflow(wf)) == ["Y"]
+    assert run_bash(script).returncode != 0
+
+
+def test_odd_backslash_count_escapes_dollar(tmp_path):
+    script = r'printf "%s" foo\$Y'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+    proc = run_bash(script)
+    assert proc.returncode == 0 and proc.stdout == b"foo$Y"
+
+
+def test_even_backslash_count_leaves_dollar_expandable(tmp_path):
+    # shell 源码中 `$` 前有两个反斜杠：第一个转义第二个，$ 仍会展开
+    script = r'printf "%s" foo\\$Y'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert names(cwe.check_workflow(wf)) == ["Y"]
+    assert run_bash(script).returncode != 0
+
+
+def test_plain_variable_in_comment_is_ignored(tmp_path):
+    script = '# $Y is documentation\nprintf ok'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+    assert run_bash(script).returncode == 0
+
+
+def test_dollar_after_hash_inside_word_is_not_comment(tmp_path):
+    """`prefix#$Y` 中 # 不在词首，不是注释，Y 仍展开。"""
+    script = 'printf "%s" "prefix#$Y"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert names(cwe.check_workflow(wf)) == ["Y"]
+    assert run_bash(script).returncode != 0
+
+
+def test_plain_var_occurrence_table_directly():
+    script = r'''prefix$A v1$B _$C :$D $E \$F $$G '$H' "$I"'''
+    got = [name for _pos, name in cwe._plain_var_occurrences(script)]
+    assert got == ["A", "B", "C", "D", "E", "I"], got
