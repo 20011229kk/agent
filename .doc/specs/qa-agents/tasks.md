@@ -264,7 +264,8 @@ item 8（工具级委派写入）仍未闭环，且不能由 shell 包装器代�
 - [x] 测试 `tests/test_run_evals.py` — 28 项，含 S1–S5 正反例、"结构全过时人工仍 PENDING
       不构成评测通过"、"报告不得出现 score/overall/pass_rate 等合成字段"
 - [x] `evals/rubrics/**` 与 `evals/fixtures/**` 纳入 CODEOWNERS 与 `validate_spec` 必查项
-- [ ] `qa-design` agent 配置（**阻塞于 Task 0 item 7/12**）
+- [x] `qa-design` agent 配置（已生成并通过 `validate_agents.py` 静态校验；
+      **不等于** IDE 已加载或权限已强制，item 8 完整链路仍待实测）
 - [ ] 用真实需求跑首轮评测并记录模型与配置版本
 
 **为什么 rubric 和 fixture 要受保护：** 改 rubric 等于改验收口径；改反例 fixture
@@ -273,12 +274,13 @@ item 8（工具级委派写入）仍未闭环，且不能由 shell 包装器代�
 ### [ ] Task 5 — `qa-executor`
 
 - [ ] 对接真实测试框架（**阻塞于用户提供 v1 场景仓库**）
-- [x] `scripts/rebuild_run_json.py` — 2026-09-22 实现（43 项单测 + 20 项集成测试）：
+- [x] `scripts/rebuild_run_json.py` — 2026-09-22 实现（当前测试数以 `make check` 输出为准）：
       JUnit XML → `run.json`，六字段版本绑定缺一即拒且不接受空串；`baseline_version` /
       `baseline_hash` 由 `--baseline-file` 从受保护版本的 `requirements.yaml` 推出，
       **算法复用 `trace_matrix.compute_baseline_hash`**（两套实现必然漂移，正是"有真实
       基线也对不上"的来源）；`node_id` 按 `--node-id-strategy` 映射（`pytest`/`raw`/`map`），
-      参数化后缀拆入 `params`，同一 node_id 重复出现视为重试并递增 `attempt`；
+      参数化后缀拆入 `params`；同一 node_id 出现多次时默认**不猜重试顺序**并置
+      `interrupted`，只有适配器显式声明 `document-order` 才分配 `attempt`；
       `skipped` 既不算 failed 也不算 passed；解析失败、零 testcase 的空报告、映射不出
       node_id 三种情况都置 `interrupted=true`（下游消费的是这个字段）
 - [x] **集成测试 JUnit → rebuild → trace → gate**（`tests/test_integration_junit_to_gate.py`）
@@ -295,6 +297,14 @@ item 8（工具级委派写入）仍未闭环，且不能由 shell 包装器代�
       `DUPLICATE_ATTEMPTS_WITHOUT_ORDER_EVIDENCE` 并置 `interrupted`；
       只有 `--retry-order document-order` 显式声明适配器保证顺序时才分配序号
 - [x] 缺证据分支也落盘报告（第四轮复核 P2）：`always()` 只保证步骤被执行，不保证脚本写文件
+- [x] 缺陷导出清单 SHA-256 严格校验（第六轮复核 P1）：每条 `records[]` 的摘要必填，
+      必须为字符串且是 64 位 hex（可带 `sha256:`）；缺失/null/空串/错误类型/格式均
+      `DEFECT_EXPORT_SHA256_INVALID` → INCOMPLETE。精确回归覆盖：把已确认阻断文件改成
+      `closed: true` 后，删除/置 null/置空摘要**不能**从 `DEFECT_RECORD_MODIFIED` 变 PASS
+- [x] workflow 变量检查改为按字符位置事件流（第六轮复核 P2）：未来赋值不可提前生效，
+      `${X:-fallback}` 只保护当前引用、`${X:=fallback}` 才传播赋值；新增真实
+      `/bin/bash -c 'set -eu'` 对照。保证范围明确收窄为**线性词法顺序**，不建模分支、
+      函数、子 shell、命令替换、`eval/source`，PASS 不冒充真实控制流可运行证明
 - [ ] **CI 证据来源升级为可信（当前必然 INCOMPLETE，需要外部输入）**：
   - [ ] 执行层随原始产物上传 collect 清单（`kind: trusted_ci` + ref）
   - [ ] 缺陷记录改为从跟踪系统导出（`kind: tracker` + 查询/导出 ref）—— 需用户指定系统
@@ -312,7 +322,8 @@ item 8（工具级委派写入）仍未闭环，且不能由 shell 包装器代�
       一个"能跑过但什么都没验证"的门禁比没有门禁更危险
 - [ ] 填入真实框架的 collect 与执行命令（阻塞于场景仓库）
 - [ ] `review_mode` 取值（阻塞于"CI 能否跑 agent"）
-- [ ] `requirements-ci.txt` 哈希锁定（当前 fallback 会拉未锁定版本）
+- [ ] `requirements-ci.txt` 哈希锁定（当前已锁直接/传递依赖版本、已删除未锁 fallback；
+      **尚未**补 `--require-hashes`）
 - [ ] **平台侧三项设置**（只有用户能做，未完成则受保护路径仍是文档约定）：
       CODEOWNERS 占位符换成真实用户/团队、开启受保护分支并把 `gate` job 设为
       required check、开启"新 commit 使已有审批失效"

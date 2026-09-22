@@ -11,18 +11,26 @@
 `yaml.safe_load` 能通过，`actionlint` 也不看跨步骤的 `GITHUB_ENV` 数据流。所以这里做一件
 很窄但很具体的事：**按步骤顺序模拟变量的可见性**。
 
-可见性规则（与 GitHub Actions 实际行为对齐）
--------------------------------------------
-一个步骤里 `$VAR` / `${VAR}` 可见，当且仅当 VAR 属于：
+可见性规则与保证边界
+----------------------
+一个步骤里 `$VAR` / `${VAR}` 在**当前词法位置**可见，当且仅当 VAR 属于：
 
 1. workflow / job / step 级 `env:`
 2. 更早步骤里 `echo "VAR=..." >> $GITHUB_ENV` 写入的
-3. 同一步骤内先 `VAR=...` 赋值过的（含 `export VAR=`、`for VAR in`、`read VAR`）
+3. 同一步骤内、当前引用**之前**已经出现的 `VAR=...` 赋值
+   （含 `export VAR=`、`for VAR in`、`read VAR`）
 4. runner 注入的内置变量（GITHUB_*、RUNNER_*、HOME 等）
-5. 用 `${VAR:-default}` / `${VAR:?}` 等带默认值形式引用的（`set -u` 下不会炸）
+5. **当前这一处**使用 `${VAR:-default}` / `${VAR:+alt}` / `${VAR:=value}` /
+   `${VAR:?message}` 等参数展开保护；保护不传播到后续 `$VAR`。其中 `:=`/`=` 会在该
+   展开之后把变量标为已赋值，`:-`/`-` 不会。
 
-判据只覆盖 `run:` 里的 shell 变量。`${{ }}` 表达式由 Actions 在运行前展开，不在此列，
-但 `${{ env.X }}` 会被记为对 X 的**使用**，因为 X 若未定义会展开成空串并静默改变行为。
+本检查器刻意只承诺**线性词法顺序**：它按字符位置判断"引用前是否出现赋值"，
+不建模 `if/case` 分支支配关系、循环是否实际进入、函数调用、子 shell/命令替换的作用域、
+`eval/source` 或间接变量名。PASS 的准确含义是：**受支持语法中没有词法上的先读后写**；
+它不证明脚本按所有真实控制流都能运行。关键步骤仍需真实 shell 故障路径测试。
+
+`${{ }}` 表达式由 Actions 在运行前展开，不作为 shell 变量；但 `${{ env.X }}` 会被记为
+对 X 的使用，因为 X 未定义会展开成空串并静默改变行为。
 
 用法
 ----
@@ -57,16 +65,23 @@ BUILTIN = {
     "RUNNER_TEMP", "RUNNER_TOOL_CACHE", "RUNNER_WORKSPACE",
 }
 
-# ${VAR} 或 $VAR（排除 ${{ }} 表达式、$((...)) 算术、$1 等位置参数）
-USE_BRACED = re.compile(r"(?<!\$)\$\{(?!\{)([A-Za-z_][A-Za-z0-9_]*)\}")
-USE_BRACED_DEFAULT = re.compile(r"(?<!\$)\$\{(?!\{)([A-Za-z_][A-Za-z0-9_]*)\s*[:#%/]")
+# shell 参数展开。逐次判断，不能把同名变量的安全引用推广到整段脚本。
+# `${X:-fallback}` 只保护这一处；后面的 `$X` 仍然是不安全引用。
+BRACED_PARAM = re.compile(
+    r"(?<!\$)\$\{(?!\{)([A-Za-z_][A-Za-z0-9_]*)([^}]*)\}")
 USE_PLAIN = re.compile(r"(?<![\$\w])\$([A-Za-z_][A-Za-z0-9_]*)")
 EXPR_ENV = re.compile(r"\$\{\{\s*env\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
-ASSIGN = re.compile(r"^\s*(?:export\s+|readonly\s+|local\s+)?"
-                    r"([A-Za-z_][A-Za-z0-9_]*)\s*=", re.M)
-ASSIGN_INLINE = re.compile(r"(?:^|[;&|(]\s*|\bthen\s+|\bdo\s+)"
-                           r"([A-Za-z_][A-Za-z0-9_]*)=", re.M)
+# 受 `set -u` 保护的参数展开操作符。#/%/替换等要求变量已经定义，不在此列。
+SAFE_PARAM_OPS = (":-", "-", ":+", "+", ":=", "=", ":?", "?")
+ASSIGNING_PARAM_OPS = (":=", "=")
+
+# 赋值事件：支持行首、`; & | (` 后、then/do 后的普通赋值。
+# `+=` 也算赋值，但第一次就用 += 的 shell 细节不在本检查器保证范围内。
+ASSIGN_EVENT = re.compile(
+    r"(?:^|[;\n&|(]\s*|\bthen\s+|\bdo\s+)\s*"
+    r"(?:export\s+|readonly\s+|local\s+)?"
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*\+?=", re.M)
 FOR_VAR = re.compile(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b")
 # `read [-r] [-d x] VAR...`：变量名可能后跟 `;`、`do`、换行
 READ_STMT = re.compile(
@@ -96,19 +111,86 @@ class Issue:
             self.name, self.detail)
 
 
-def _uses(script: str):
-    """脚本里用到的变量名（去掉带默认值的安全引用）。"""
-    safe = set(USE_BRACED_DEFAULT.findall(script))
-    used = set(USE_BRACED.findall(script)) | set(USE_PLAIN.findall(script))
-    return used - safe
+def _safe_param_operator(tail: str):
+    """返回参数展开操作符；不是受保护形式则返回 None。"""
+    for op in SAFE_PARAM_OPS:  # 长操作符在前，避免 `:-` 被 `-` 抢先
+        if tail.startswith(op):
+            return op
+    return None
 
 
-def _assigns(script: str):
-    names = set(ASSIGN.findall(script)) | set(ASSIGN_INLINE.findall(script))
-    names |= set(FOR_VAR.findall(script))
-    for _opts, targets in READ_STMT.findall(script):
-        names |= set(targets.split())
-    return names
+def _command_end(script: str, start: int) -> int:
+    """返回赋值所在简单命令的词法末尾（`;` 或换行）。
+
+    不尝试解析引号/命令替换；这就是文档声明的线性词法保证边界。把赋值在命令末尾才
+    设为可见，可正确处理 `X=$X`：右侧展开发生在赋值生效前，不能因为看见 `X=` 就
+    提前把后面的 `$X` 洗白。
+    """
+    positions = [p for p in (script.find(";", start), script.find("\n", start))
+                 if p >= 0]
+    return min(positions) if positions else len(script)
+
+
+def _script_events(script: str):
+    """生成 `(位置, 优先级, kind, name)` 事件，按源码位置处理。
+
+    priority：同一位置先处理 use，再处理 assignment，避免 RHS 引用被当前赋值提前满足。
+    """
+    events = []
+    braced_ranges = []
+
+    # `${VAR...}`：每一处引用独立判断。安全默认值不会保护后续同名引用。
+    for m in BRACED_PARAM.finditer(script):
+        name, tail = m.group(1), m.group(2)
+        braced_ranges.append((m.start(), m.end()))
+        op = _safe_param_operator(tail)
+        if op is None:
+            events.append((m.start(), 0, "use", name))
+        elif op in ASSIGNING_PARAM_OPS:
+            # `${X:=v}` 当前引用本身受保护，并在展开完成后赋值
+            events.append((m.end(), 1, "assign", name))
+
+    # `$VAR`：跳过位于 `${...}` 或 `${{...}}` 内部的片段
+    expression_ranges = [(m.start(), m.end()) for m in
+                         re.finditer(r"\$\{\{.*?\}\}", script, re.S)]
+    for m in USE_PLAIN.finditer(script):
+        pos = m.start()
+        if any(a <= pos < b for a, b in braced_ranges + expression_ranges):
+            continue
+        events.append((pos, 0, "use", m.group(1)))
+
+    # 普通赋值在简单命令结束后才视为生效（RHS 可能引用同名变量）
+    for m in ASSIGN_EVENT.finditer(script):
+        events.append((_command_end(script, m.end()), 1, "assign", m.group(1)))
+
+    # for 变量在 `do` 之后的循环体内可见
+    for m in FOR_VAR.finditer(script):
+        do = re.search(r"\bdo\b", script[m.end():])
+        pos = m.end() + do.end() if do else m.end()
+        events.append((pos, 1, "assign", m.group(1)))
+
+    # read 目标在 read 命令完成后可见
+    for m in READ_STMT.finditer(script):
+        for name in m.group(2).split():
+            events.append((m.end(), 1, "assign", name))
+
+    return sorted(events, key=lambda x: (x[0], x[1], x[3]))
+
+
+def _undefined_uses(script: str, initially_visible):
+    """按源码位置返回 `[(name, line)]`，不把未来赋值提前生效。"""
+    visible = set(initially_visible)
+    undefined = []
+    seen = set()
+    for pos, _priority, kind, name in _script_events(script):
+        if kind == "assign":
+            visible.add(name)
+            continue
+        if name not in visible and name not in seen:
+            line = script.count("\n", 0, pos) + 1
+            undefined.append((name, line))
+            seen.add(name)
+    return undefined
 
 
 def _github_env_writes(script: str):
@@ -144,15 +226,20 @@ def check_workflow(path: str):
             expr_used = set(EXPR_ENV.findall(yaml.safe_dump(step,
                                                             allow_unicode=True)))
             if script:
-                assigned_here = _assigns(script)
-                for name in sorted(_uses(script) | expr_used):
-                    if name in here or name in assigned_here:
-                        continue
+                # shell 引用按字符位置处理：未来赋值不能提前生效，默认值只保护当前引用。
+                for name, line_no in _undefined_uses(script, here):
                     issues.append(Issue(
                         path, job_name, step_name, "ENV_USED_BEFORE_SET", name,
-                        "在本步骤读取，但既不在 workflow/job/step 的 env 里，"
-                        "也没有更早步骤写入 $GITHUB_ENV，本步骤内也未赋值 —— "
-                        "set -u 下会直接 unbound variable 失败"))
+                        "第 {} 行读取，但在该词法位置之前既不在 workflow/job/step env，"
+                        "也没有更早步骤写入 $GITHUB_ENV，本步骤此前也未赋值。"
+                        "注意：本检查只保证线性词法顺序，不分析分支/子 shell/函数控制流".format(
+                            line_no)))
+                # `${{ env.X }}` 在 shell 执行前由 Actions 展开，同步骤 shell 赋值救不了它
+                for name in sorted(expr_used):
+                    if name not in here:
+                        issues.append(Issue(
+                            path, job_name, step_name, "ENV_EXPR_UNDEFINED", name,
+                            "${{ env.%s }} 未定义 —— 会展开成空串并静默改变行为" % name))
                 visible |= _github_env_writes(script)
             else:
                 for name in sorted(expr_used):
@@ -187,8 +274,8 @@ def main(argv=None) -> int:
             print("  %s" % i)
         return 1
     print("verdict: PASS")
-    print("note: 只检查 shell 变量的先赋值后使用；不证明步骤逻辑正确，"
-          "也不替代真实运行。")
+    print("note: 只检查受支持语法中的线性词法先读后写；不分析分支支配、函数调用、"
+          "子 shell/命令替换作用域、eval/source，也不替代真实故障路径执行。")
     return 0
 
 

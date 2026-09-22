@@ -1585,3 +1585,122 @@ def test_cli_writes_report_on_internal_error(tmp_path, monkeypatch):
     assert report["verdict"] == gc.VERDICT_INCOMPLETE
     assert report["findings"][0]["code"] == "GATE_INTERNAL_ERROR"
     assert "injected failure" in report["findings"][0]["detail"]
+
+
+# ---------------------------------------------------------------------------
+# 导出摘要是必填完整性契约（第六轮复核 P1）
+# ---------------------------------------------------------------------------
+
+
+def _set_manifest_sha(root, value_marker, value=None):
+    """把清单第一条记录的 sha256 改成指定形态。
+
+    value_marker: missing | value。用于分别构造缺字段与显式 null/空串/畸形类型。
+    """
+    path = root / "qa" / "defects" / "export-manifest.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["records"], "测试前提：清单至少有一条记录"
+    if value_marker == "missing":
+        data["records"][0].pop("sha256", None)
+    else:
+        data["records"][0]["sha256"] = value
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+@pytest.mark.parametrize("marker,value", [
+    ("missing", None),
+    ("value", None),
+    ("value", ""),
+    ("value", []),
+    ("value", {"hash": "x"}),
+    ("value", 123),
+    ("value", "sha256:not-hex"),
+    ("value", "a" * 63),
+    ("value", "g" * 64),
+    ("value", "sha1:" + "a" * 64),
+])
+def test_defect_export_sha256_missing_or_invalid_is_incomplete(clean, marker, value):
+    """缺失、空值、错误类型或格式都必须是证据不足，不得跳过内容核验。"""
+    root, h = clean
+    write_defect(root, "BUG-HASH", ["TC-1"], confirmed_blocking=False)
+    _set_manifest_sha(root, marker, value)
+
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_EXPORT_SHA256_INVALID" in codes(rep), codes(rep)
+    assert rep.verdict != gc.VERDICT_PASS
+
+
+@pytest.mark.parametrize("marker,value", [
+    ("missing", None),
+    ("value", None),
+    ("value", ""),
+])
+def test_tampered_closed_defect_cannot_pass_by_removing_sha(clean, marker, value):
+    """复核精确反例：篡改 closed=true 后删/空摘要，不得从 INCOMPLETE 变 PASS。
+
+    1. 原始已确认阻断 + 完整摘要 → FAIL / BLOCKING_DEFECT_NOT_CLEARED
+    2. 改 closed=true、保留摘要 → INCOMPLETE / DEFECT_RECORD_MODIFIED
+    3. 同一篡改文件、摘要缺失/null/空串 → 仍 INCOMPLETE，绝不能 PASS/findings=[]
+    """
+    root, h = clean
+    write_defect(root, "BUG-CLOSE", ["TC-1"], confirmed_blocking=True)
+
+    original = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert original.verdict == gc.VERDICT_FAIL
+    assert "BLOCKING_DEFECT_NOT_CLEARED" in codes(original)
+
+    path = root / "qa" / "defects" / "BUG-CLOSE.md"
+    text = path.read_text(encoding="utf-8")
+    # frontmatter 无 closed 字段时等价 false；加入 true 模拟候选把阻断缺陷关掉
+    text = text.replace("confirmed_blocking: true\n",
+                        "confirmed_blocking: true\nclosed: true\n")
+    path.write_text(text, encoding="utf-8")
+
+    with_original_hash = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_RECORD_MODIFIED" in codes(with_original_hash)
+    assert with_original_hash.verdict == gc.VERDICT_INCOMPLETE
+
+    _set_manifest_sha(root, marker, value)
+    without_hash = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_EXPORT_SHA256_INVALID" in codes(without_hash), codes(without_hash)
+    assert without_hash.verdict == gc.VERDICT_INCOMPLETE
+    assert without_hash.findings, "摘要缺失把篡改后的缺陷静默放成 findings=[]"
+
+
+def test_defect_export_sha256_accepts_bare_lowercase_hex(clean):
+    """64 位裸 hex 是支持的明确语法，内部规范化为 sha256: 前缀。"""
+    root, h = clean
+    write_defect(root, "BUG-BARE", ["TC-1"], confirmed_blocking=False)
+    manifest = root / "qa" / "defects" / "export-manifest.json"
+    data = json.loads(manifest.read_text())
+    data["records"][0]["sha256"] = data["records"][0]["sha256"].split(":", 1)[1]
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_EXPORT_SHA256_INVALID" not in codes(rep)
+    assert "DEFECT_RECORD_MODIFIED" not in codes(rep)
+
+
+def test_defect_export_duplicate_id_is_incomplete(clean):
+    root, h = clean
+    write_defect(root, "BUG-DUP", ["TC-1"], confirmed_blocking=False)
+    manifest = root / "qa" / "defects" / "export-manifest.json"
+    data = json.loads(manifest.read_text())
+    data["records"].append(dict(data["records"][0]))
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_EXPORT_RECORD_DUPLICATE" in codes(rep)
+    assert rep.verdict != gc.VERDICT_PASS
+
+
+def test_defect_export_prefixed_uppercase_hex_is_normalized(clean):
+    """SHA-256 的 A-F 大小写不影响语义；格式合法后应统一小写比较。"""
+    root, h = clean
+    write_defect(root, "BUG-UPPER", ["TC-1"], confirmed_blocking=False)
+    manifest = root / "qa" / "defects" / "export-manifest.json"
+    data = json.loads(manifest.read_text())
+    data["records"][0]["sha256"] = data["records"][0]["sha256"].upper().replace(
+        "SHA256:", "sha256:")
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_EXPORT_SHA256_INVALID" not in codes(rep)
+    assert "DEFECT_RECORD_MODIFIED" not in codes(rep)

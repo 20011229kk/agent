@@ -31,6 +31,7 @@ import dataclasses
 import hashlib
 import json
 import pathlib
+import re
 import sys
 from typing import Dict, List, Optional
 
@@ -599,13 +600,37 @@ def check_defect_export(root, findings):
         return
 
     declared = {}
+    hash_re = re.compile(r"^(?:sha256:)?[0-9a-fA-F]{64}$")
     for rec in records:
-        if not isinstance(rec, dict) or not rec.get("id"):
+        if not isinstance(rec, dict) or not isinstance(rec.get("id"), str) \
+                or not rec.get("id").strip():
             findings.append(Finding(
                 "DEFECT_EXPORT_RECORD_INVALID", "EVIDENCE_MISSING",
-                str(manifest_path), "导出清单条目缺少 id: {}".format(rec)))
+                str(manifest_path), "导出清单条目缺少有效字符串 id: {}".format(rec)))
             continue
-        declared[str(rec["id"])] = rec.get("sha256")
+        did = rec["id"].strip()
+        if did in declared:
+            findings.append(Finding(
+                "DEFECT_EXPORT_RECORD_DUPLICATE", "EVIDENCE_MISSING", did,
+                "导出清单重复声明缺陷 {} —— 无法确认哪条摘要生效".format(did)))
+            continue
+
+        expected_hash = rec.get("sha256")
+        # 摘要是完整性契约的必填字段，不是可选优化。上一版 `if expected_hash:`
+        # 让缺失/null/空字符串直接跳过内容核验：只要清单删掉摘要，篡改后的 closed=true
+        # 就从 DEFECT_RECORD_MODIFIED / INCOMPLETE 变成 PASS/findings=[]。
+        if not isinstance(expected_hash, str) or not hash_re.fullmatch(expected_hash):
+            findings.append(Finding(
+                "DEFECT_EXPORT_SHA256_INVALID", "EVIDENCE_MISSING", did,
+                "缺陷 {} 的 sha256 必须是非空字符串且为 64 位十六进制"
+                "（可带 sha256: 前缀），实际 {!r} —— 摘要缺失时不得跳过内容核验".format(
+                    did, expected_hash)))
+            # 仍登记 ID，避免同一条记录又被报成 UNDECLARED；值 None 表示不可接受
+            declared[did] = None
+            continue
+        # 前缀与 hex 大小写统一规范化；摘要语义不区分 A-F 大小写
+        digest_hex = expected_hash.split(":", 1)[-1].lower()
+        declared[did] = "sha256:" + digest_hex
 
     defects_dir = root / "qa" / "defects"
     present = {}
@@ -621,16 +646,15 @@ def check_defect_export(root, findings):
                 "导出清单声明了缺陷 {} 但判定输入里没有该记录 —— "
                 "已确认阻断不得因为输入漏带而消失".format(did)))
             continue
-        if expected_hash:
+        if expected_hash is not None:
             actual = "sha256:" + hashlib.sha256(
                 path.read_bytes()).hexdigest()
-            normalized = expected_hash if str(expected_hash).startswith("sha256:") \
-                else "sha256:" + str(expected_hash)
-            if actual != normalized:
+            # expected_hash 已在清单解析阶段做类型与格式校验并规范化
+            if actual != expected_hash:
                 findings.append(Finding(
                     "DEFECT_RECORD_MODIFIED", "EVIDENCE_MISSING", did,
                     "缺陷记录 {} 的内容与导出清单不符（清单 {}，实际 {}）".format(
-                        did, normalized, actual)))
+                        did, expected_hash, actual)))
 
     for did in sorted(set(present) - set(declared)):
         findings.append(Finding(

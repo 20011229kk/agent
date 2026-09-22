@@ -86,6 +86,18 @@
 - 必测范围 SHALL 来自经确认的执行计划（`qa/plan/**/required-scope.yaml`），**SHALL NOT** 由实际运行结果反向决定。
 - **WHEN** 请求门禁评估，**THEN** 系统 SHALL 按此顺序判定：任一阻断项明确失败 → `FAIL`；无明确失败但必需证据不完整 → `INCOMPLETE`；全部必需检查满足 → `PASS`。
 - 证据不完整 SHALL 包含：必测项未执行、结果缺失、执行中断、证据版本不匹配、基线 STALE 或未确认、手工必测项缺证据、reviewer 阻断未关闭。
+- 缺陷跟踪系统导出清单 SHALL 对每条 `records[]` 要求非空字符串 `id` 与格式正确的
+  SHA-256（64 位十六进制，可带 `sha256:` 前缀）；缺失、`null`、空字符串、错误类型、错误
+  长度或非十六进制 SHALL 判 `INCOMPLETE`，**SHALL NOT** 因摘要为空而跳过内容核验。
+- **IF** 缺陷文件在导出后被改为 `closed: true`，**THEN** 删除或清空清单摘要
+  **SHALL NOT** 使 `DEFECT_RECORD_MODIFIED` 消失并得到 PASS；缺摘要本身 SHALL 产生
+  `DEFECT_EXPORT_SHA256_INVALID`。
+- workflow 变量静态检查 SHALL 按源码位置处理受支持的线性语法：未来赋值
+  **SHALL NOT** 提前满足当前引用；`${X:-fallback}` 只保护当前展开，**SHALL NOT**
+  使后续裸 `$X` 可见；`${X:=fallback}` 可在展开后使后续引用可见。
+- workflow 变量检查的 PASS SHALL 明确限定为"受支持语法中的线性词法顺序无先读后写"，
+  **SHALL NOT** 表述为真实控制流可运行证明；分支支配、循环是否进入、函数调用、
+  子 shell/命令替换作用域、`eval/source` 属未建模范围，关键步骤仍需真实 shell 故障路径验证。
 - 报告 SHALL 始终列全所有失败项与缺失项，**SHALL NOT** 因汇总状态而隐藏明细。
 - **IF** 任一门禁项未达标，**THEN** 系统 SHALL 给出不准出结论，**SHALL NOT** 把局部通过表述为全部通过。
 - 运行记录 SHALL 绑定 `candidate_sha`、`target_sha`、`policy_version`、`baseline_version`、`baseline_hash`、`baseline_approval_ref`；配置标识 SHALL 脱敏且 SHALL 保留 `traceId` 等诊断字段。
