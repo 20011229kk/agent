@@ -10,7 +10,7 @@
 PY := /usr/bin/python3
 ROOT := $(shell pwd)
 
-.PHONY: help check validate validate-agents test gate isolation-verify clean
+.PHONY: help check validate validate-agents validate-workflow test gate isolation-verify clean
 
 help:
 	@echo "make check             结构校验 + 角色配置校验 + 全部单测（提交前跑这个）"
@@ -21,7 +21,11 @@ help:
 	@echo "make isolation-verify  隔离边界验证 C0–C12（需要 podman）"
 	@echo "make clean             清理临时产物"
 
-check: validate validate-agents test
+check: validate validate-agents validate-workflow test
+
+validate-workflow:
+	@echo "==> check_workflow_env"
+	@$(PY) scripts/check_workflow_env.py --root $(ROOT)
 
 validate:
 	@echo "==> validate_spec"

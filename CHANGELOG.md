@@ -610,3 +610,69 @@ workflow YAML 可解析。（上一轮汇报写的"181"是当时版本的输出�
 **判定输入的完整性本身没有判据**。门禁检查了结果、检查了版本绑定，却没有检查"该带进来的
 证据是不是都带进来了、它们从哪来"。缺输入导致的通过比判错更危险，因为它在报告里
 表现为 `findings=[]`——干净得看不出问题。
+
+### 第五轮复核：workflow 变量先用后赋值、导出完整性、顺序传播、类型崩溃（2026-09-22）
+
+核对 `88c71ed`。四条全部成立，且全部是本地可修的实现问题，不能归到"只剩外部输入"。
+
+**P1 `RAW_ROOT` 在首次使用后才赋值**
+
+"准备产物目录"步骤在 `set -euo pipefail` 下读 `$RAW_ROOT`，而唯一赋值在后面的"组装判定树"
+步骤的 `GITHUB_ENV` 里。复核原样执行该步骤得到 `RAW_ROOT: unbound variable` 退出 1。
+后果不是预期的"缺证据 INCOMPLETE"，而是**流程中断**：下载与组装步骤被跳过，
+后面的 `if: always()` 也补不出可信脚本、绑定变量或有效报告。
+
+修复：`RAW_ROOT` / `GATE_ROOT` 提到 **job 级 `env:`**，保证所有步骤（含
+`download-artifact` 的 `with.path`）都能看到。
+
+并且补了判据：新增 `scripts/check_workflow_env.py`，**按真实步骤顺序**模拟变量可见性
+（workflow/job/step env、更早步骤写入 `$GITHUB_ENV`、同步骤内赋值、`for`/`read` 绑定、
+runner 内置、`${VAR:-default}` 安全形式、`${{ env.X }}` 未定义会静默变空串），
+接进 `make check`（`make validate-workflow`）。26 项测试，含复核那个精确场景。
+写检查器时它先逮到我两处：正则把 `read -r d` 的 `d` 当成 `-r` 的参数吃掉（误报），
+以及 `run-tests` 占位步骤真的引用了未定义的 `RUN_ID`（真实问题，已在 job env 定义）。
+**只验证 YAML 可解析覆盖不到这一类。**
+
+**P1 来源声明证明不了导出集合完整**
+
+上一轮的 `EVIDENCE_SOURCE_*` 只检查标签与 ref 非空，分不清"成功导出零缺陷"与
+"导出内容漏带"：保持同一份 `tracker` 声明，仅漏带缺陷文件，门禁仍 `PASS / findings=[]`。
+原来的反例没被关闭。
+
+修复：`kind: tracker` 必须附带导出清单 `qa/defects/export-manifest.json`
+（`query_ref` / `exported_at` / `complete` / `records[{id, sha256}]`），并逐条核对：
+
+| 情况 | 结论 |
+|---|---|
+| 清单缺失 | `DEFECT_EXPORT_MANIFEST_ABSENT` |
+| `complete != true` | `DEFECT_EXPORT_INCOMPLETE` |
+| 清单有、输入没有 | `DEFECT_RECORD_MISSING`（**这就是漏带反例**） |
+| 输入有、清单没有 | `DEFECT_RECORD_UNDECLARED` |
+| 哈希不符 | `DEFECT_RECORD_MODIFIED` |
+| `records: []` + `complete: true` | 有效的显式空集合，放行 |
+
+**P2 顺序未知却仍给出"末次"结果**
+
+默认 `none` 把重复记录都标成 `attempt=1`，下游照旧取列表最后一条：同一组 failed/passed
+仅交换输入排列，`last_result` 从 true 变 false、门禁从 INCOMPLETE 变 FAIL。
+虽然当时都带 `RUN_INTERRUPTED` 没造成放行，但**判定不能由文件排列决定**。
+
+修复：顺序未知时重建器**不给序号**（`attempt: null` + `order_known: false`）；
+`trace_matrix` 识别"序号缺失或重复"为 `ATTEMPT_ORDER_UNKNOWN`（BLOCKING），
+该 TC 的 `last_result` 置 `None`，并对已有序号的组按序号排序而不是按出现顺序。
+新增排列不变性测试：两种排列的 verdict 与 last_result 必须一致。
+
+**P2 非法 `kind` 类型导致崩溃且不落盘**
+
+`kind: [tracker]` 是合法 YAML，但集合成员检查抛 `TypeError: unhashable type: 'list'`，
+CLI 非零退出且 `--out` 文件不存在。修复：先查类型（`EVIDENCE_SOURCE_KIND_INVALID`），
+`ref` 同样要求字符串；另加兜底——`evaluate` 的任何未预期异常都写出
+`GATE_INTERNAL_ERROR` + INCOMPLETE 报告。崩溃不是判定，但"没有报告"更糟。
+
+**验证**：`make check` = 190 项结构校验 PASS + 角色配置校验 PASS + **workflow 变量检查
+PASS** + **510 项测试通过**。
+
+**这一轮的教训**：三轮下来问题在往上游走——先是判据比被测对象弱，然后是没按消费方契约写，
+再是判定输入的完整性没有判据，这一轮是**流水线自身的可执行性没有判据**（变量先用后赋值、
+崩溃不落盘）。共同点是：我总在验证"业务逻辑对不对"，而没有验证"这套检查在真实执行顺序下
+能不能跑起来、跑不起来时还剩什么"。

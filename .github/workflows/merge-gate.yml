@@ -57,6 +57,10 @@ jobs:
   run-tests:
     runs-on: ubuntu-latest
     needs: self-check
+    env:
+      # 占位步骤里引用了 $RUN_ID；不在 job 级定义的话，填真实命令时会直接
+      # `unbound variable`（set -u 下），而且静态检查会把它报出来。
+      RUN_ID: ${{ github.event.pull_request.head.sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -96,6 +100,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: run-tests
     if: always()               # 执行失败也要出结论（应为 INCOMPLETE 或 FAIL）
+    env:
+      # 在 job 级定义，保证**所有**步骤（包括 download-artifact action 的 with.path）
+      # 都能看到它。上一版把它写在"组装判定树"步骤的 GITHUB_ENV 里，而"准备产物目录"
+      # 步骤在它之前就读 $RAW_ROOT —— `set -u` 下直接 `RAW_ROOT: unbound variable`
+      # 退出 1。那不是预期的"缺证据 INCOMPLETE"，是流程本身中断：下载与组装步骤被跳过，
+      # 后面的 always() 也补不出可信脚本与有效报告。
+      RAW_ROOT: ${{ runner.temp }}/ci-artifacts/raw
+      GATE_ROOT: .gate-root
     steps:
       - uses: actions/checkout@v4
         with:
@@ -186,9 +198,8 @@ jobs:
 
           POLICY_VERSION=$(git rev-parse "$TARGET_SHA:qa/plan")
           echo "POLICY_VERSION=$POLICY_VERSION" >> "$GITHUB_ENV"
-          echo "GATE_ROOT=.gate-root" >> "$GITHUB_ENV"
-          # 产物落到 checkout 之外：候选可以在仓库里预置任何目录
-          echo "RAW_ROOT=$RUNNER_TEMP/ci-artifacts/raw" >> "$GITHUB_ENV"
+          # RAW_ROOT / GATE_ROOT 在 job 级 env 定义，不在这里设置：
+          # 它们的消费者（准备目录、下载 action）在本步骤之前执行。
 
       - name: 从原始产物重建门禁输入
         id: rebuild

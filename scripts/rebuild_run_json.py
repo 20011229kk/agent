@@ -321,8 +321,15 @@ def build(raw_files, binding: dict, strategy: str = "pytest",
 
     duplicates = sorted(k for k, v in grouped.items() if len(v) > 1)
     for key, seq in grouped.items():
+        ordered = len(seq) == 1 or retry_order == "document-order"
         for i, a in enumerate(seq, start=1):
-            a["attempt"] = i if (len(seq) == 1 or retry_order == "document-order") else 1
+            # 顺序未知时**不给序号**（null），而不是都写 1。
+            # 都写 1 会让下游继续拿"列表最后一条"当末次结果：同一组 failed/passed，
+            # 仅交换输入排列，last_result 就从 true 变 false、门禁从 INCOMPLETE 变 FAIL。
+            # 判定不能由文件排列决定；null 让消费者能识别"顺序未知"这个状态。
+            a["attempt"] = i if ordered else None
+            if not ordered:
+                a["order_known"] = False
 
     counts = {}
     for a in attempts:

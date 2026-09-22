@@ -121,6 +121,9 @@ def write_defect(root, did, tcs, confirmed_blocking=True):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("---\n" + yaml.safe_dump(fm, allow_unicode=True, sort_keys=False)
                     + "---\n\n# defect\n", encoding="utf-8")
+    # 写了缺陷就同步导出清单：清单与实际记录不一致本身是反例，应由专门的测试构造，
+    # 不该在每个普通用例里意外触发
+    sync_defect_manifest(root)
 
 
 def write_verdict(root, status="NO_BLOCKING", candidate_sha=SHA_NEW,
@@ -155,6 +158,36 @@ def codes(rep):
     return [f.code for f in rep.findings]
 
 
+def sync_defect_manifest(root, complete=True, drop=None, extra=None):
+    """按目录里实际存在的缺陷文件写导出清单。
+
+    清单的意义是区分"成功导出零缺陷"与"导出内容漏带"，所以它必须与实际记录一致；
+    `drop` / `extra` 用来构造不一致的反例。
+    """
+    import hashlib
+    records = []
+    ddir = root / "qa" / "defects"
+    if ddir.is_dir():
+        for p in sorted(ddir.glob("*.md")):
+            if drop and p.stem in drop:
+                continue
+            records.append({
+                "id": p.stem,
+                "sha256": "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest(),
+            })
+    for did in (extra or []):
+        records.append({"id": did, "sha256": None})
+    path = ddir / "export-manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "query_ref": "tracker://project=QA&status=open",
+        "exported_at": "2026-09-22T10:00:00+08:00",
+        "complete": complete,
+        "records": records,
+    }, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 def write_evidence_source(root, collect="trusted_ci", runs="trusted_ci",
                          defects="tracker", refs=True):
     """证据来源声明。缺它一律 INCOMPLETE（缺失不等于零阻断）。"""
@@ -180,6 +213,7 @@ def _evidence_source(tmp_path):
     来源可信性本身的反例在 test_evidence_source_* 里单独测。
     """
     write_evidence_source(tmp_path)
+    sync_defect_manifest(tmp_path)     # 显式空集合：有效的"零缺陷"
 
 
 @pytest.fixture()
@@ -1080,6 +1114,7 @@ def test_closed_defect_does_not_block(clean):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("---\n" + yaml.safe_dump(fm, allow_unicode=True) + "---\n",
                  encoding="utf-8")
+    sync_defect_manifest(root)
 
     rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
     assert "BLOCKING_DEFECT_NOT_CLEARED" not in codes(rep)
@@ -1153,6 +1188,7 @@ def test_severity_outside_blocking_list_does_not_block(clean):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("---\n" + yaml.safe_dump(fm, allow_unicode=True) + "---\n",
                  encoding="utf-8")
+    sync_defect_manifest(root)
 
     rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
     assert "BLOCKING_DEFECT_NOT_CLEARED" not in codes(rep)
@@ -1343,3 +1379,209 @@ def test_report_written_even_when_no_baseline(tmp_path, monkeypatch, capsys):
     assert data["verdict"] == gc.VERDICT_INCOMPLETE
     assert data["findings"][0]["code"] == "BASELINE_ABSENT"
     assert data["binding"]["candidate_sha"] == SHA_NEW
+
+
+# ---------------------------------------------------------------------------
+# 缺陷导出完整性（第五轮复核：来源标签证明不了"导出内容是否漏带"）
+# ---------------------------------------------------------------------------
+
+
+def test_R_missing_defect_file_declared_in_manifest_is_incomplete(clean):
+    """复核未关闭的那个反例：同一份 tracker 声明与 ref，仅漏带缺陷文件。
+
+    先给阳性对照：带缺陷 → FAIL。再把文件删掉而清单仍声明它 → 必须 INCOMPLETE，
+    不能变成 PASS / findings=[]。
+    """
+    root, h = clean
+    write_defect(root, "BUG-1", ["TC-1"], confirmed_blocking=True)
+    before = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert before.verdict == gc.VERDICT_FAIL
+    assert "BLOCKING_DEFECT_NOT_CLEARED" in codes(before)
+
+    # 组装判定树时漏带这份记录，但清单（来自可信导出）仍声明它存在
+    (root / "qa" / "defects" / "BUG-1.md").unlink()
+    after = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_RECORD_MISSING" in codes(after), codes(after)
+    assert after.verdict == gc.VERDICT_INCOMPLETE
+
+
+def test_dropping_whole_defect_dir_with_tracker_claim_is_incomplete(clean):
+    """整份缺陷目录都没带进来，而来源仍声明 tracker → INCOMPLETE。"""
+    root, h = clean
+    write_defect(root, "BUG-1", ["TC-1"], confirmed_blocking=True)
+    manifest = json.loads(
+        (root / "qa" / "defects" / "export-manifest.json").read_text())
+    import shutil
+    shutil.rmtree(root / "qa" / "defects")
+    # 清单由可信导出产出，应当在判定输入之外留存；这里模拟它还在
+    p = root / "qa" / "defects" / "export-manifest.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(manifest), encoding="utf-8")
+
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_RECORD_MISSING" in codes(rep)
+    assert rep.verdict == gc.VERDICT_INCOMPLETE
+
+
+def test_manifest_absent_with_tracker_claim_is_incomplete(clean):
+    """声明 tracker 但没有导出清单 → 分不清"零缺陷"与"漏带"。"""
+    root, h = clean
+    (root / "qa" / "defects" / "export-manifest.json").unlink()
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_EXPORT_MANIFEST_ABSENT" in codes(rep)
+    assert rep.verdict == gc.VERDICT_INCOMPLETE
+
+
+def test_explicit_empty_export_is_valid(clean):
+    """显式空集合（complete=true, records=[]）是有效证据，可以 PASS。"""
+    root, h = clean
+    sync_defect_manifest(root)   # 目录里没有缺陷 → records: []
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert rep.verdict == gc.VERDICT_PASS, codes(rep)
+
+
+def test_incomplete_export_flag_is_incomplete(clean):
+    root, h = clean
+    sync_defect_manifest(root, complete=False)
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_EXPORT_INCOMPLETE" in codes(rep)
+    assert rep.verdict == gc.VERDICT_INCOMPLETE
+
+
+def test_undeclared_defect_file_is_incomplete(clean):
+    """目录里有、清单里没有 → 来源不明的记录。"""
+    root, h = clean
+    write_defect(root, "BUG-2", ["TC-1"], confirmed_blocking=False)
+    sync_defect_manifest(root, drop={"BUG-2"})
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_RECORD_UNDECLARED" in codes(rep)
+    # 该缺陷的 severity 落在阻断清单内，所以这里正确的汇总是 FAIL（测出问题优先于证据
+    # 不足）。关键断言是"不得 PASS"以及来源不明被指出来。
+    assert rep.verdict != gc.VERDICT_PASS
+
+
+def test_modified_defect_file_is_incomplete(clean):
+    """导出后被改动 → 哈希不符。"""
+    root, h = clean
+    write_defect(root, "BUG-3", ["TC-1"], confirmed_blocking=False)
+    p = root / "qa" / "defects" / "BUG-3.md"
+    p.write_text(p.read_text(encoding="utf-8") + "\n改了一行\n", encoding="utf-8")
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_RECORD_MODIFIED" in codes(rep)
+    assert rep.verdict != gc.VERDICT_PASS
+
+
+@pytest.mark.parametrize("field", ["query_ref", "exported_at"])
+def test_manifest_missing_traceability_fields(clean, field):
+    root, h = clean
+    path = root / "qa" / "defects" / "export-manifest.json"
+    data = json.loads(path.read_text())
+    del data[field]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_EXPORT_MANIFEST_FIELD_ABSENT" in codes(rep)
+
+
+def test_manifest_records_not_list(clean):
+    root, h = clean
+    path = root / "qa" / "defects" / "export-manifest.json"
+    path.write_text(json.dumps({"query_ref": "x", "exported_at": "y",
+                                "complete": True, "records": "nope"}),
+                    encoding="utf-8")
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "DEFECT_EXPORT_MANIFEST_INVALID" in codes(rep)
+
+
+def test_candidate_copy_defects_do_not_require_manifest(clean):
+    """声明 candidate_copy 时本身已经是 INCOMPLETE，不再叠加清单要求。"""
+    root, h = clean
+    write_evidence_source(root, defects="candidate_copy")
+    (root / "qa" / "defects" / "export-manifest.json").unlink()
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    found = codes(rep)
+    assert "EVIDENCE_SOURCE_UNTRUSTED" in found
+    assert "DEFECT_EXPORT_MANIFEST_ABSENT" not in found
+
+
+# ---------------------------------------------------------------------------
+# 非法类型不得让判定器崩溃（第五轮复核 P2）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_kind", [["tracker"], {"k": "v"}, 123, True])
+def test_invalid_kind_type_is_finding_not_crash(clean, bad_kind):
+    """`kind: [tracker]` 曾抛 TypeError: unhashable type: 'list'。"""
+    root, h = clean
+    path = root / "qa" / "evidence-source.yaml"
+    path.write_text(yaml.safe_dump({
+        "collect": {"kind": "trusted_ci", "ref": "x"},
+        "runs": {"kind": "trusted_ci", "ref": "x"},
+        "defects": {"kind": bad_kind, "ref": "x"},
+    }, allow_unicode=True), encoding="utf-8")
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))   # 不得抛异常
+    assert "EVIDENCE_SOURCE_KIND_INVALID" in codes(rep)
+    assert rep.verdict == gc.VERDICT_INCOMPLETE
+
+
+def test_invalid_ref_type_is_finding(clean):
+    root, h = clean
+    path = root / "qa" / "evidence-source.yaml"
+    path.write_text(yaml.safe_dump({
+        "collect": {"kind": "trusted_ci", "ref": ["x"]},
+        "runs": {"kind": "trusted_ci", "ref": "x"},
+        "defects": {"kind": "tracker", "ref": "x"},
+    }, allow_unicode=True), encoding="utf-8")
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "EVIDENCE_SOURCE_REF_ABSENT" in codes(rep)
+
+
+def test_cli_writes_report_on_invalid_kind(tmp_path, monkeypatch):
+    """真实 CLI 落盘路径：非法 kind 也必须有结构化报告，不能只留非零退出码。"""
+    data = write_baseline(tmp_path, [req("REQ-1")])
+    h = data["meta"]["content_hash"]
+    write_cases(tmp_path, [case("TC-1", ["REQ-1"])])
+    write_collected(tmp_path, [{"node_id": "t::a", "cases": ["TC-1"]}])
+    write_run(tmp_path, [{"node_id": "t::a", "attempt": 1, "status": "passed"}], h)
+    write_scope(tmp_path, ["TC-1"])
+    (tmp_path / "qa" / "evidence-source.yaml").write_text(
+        yaml.safe_dump({"collect": {"kind": "trusted_ci", "ref": "x"},
+                        "runs": {"kind": "trusted_ci", "ref": "x"},
+                        "defects": {"kind": ["tracker"], "ref": "x"}}),
+        encoding="utf-8")
+
+    out = tmp_path / "reports" / "merge-gate-report.json"
+    monkeypatch.setattr(sys, "argv", [
+        "gate_check.py", "--root", str(tmp_path), "--json",
+        "--candidate-sha", SHA_NEW, "--out", str(out),
+    ])
+    rc = gc.main()
+    assert rc == 1
+    assert out.is_file(), "非法 kind 时没有落盘报告"
+    report = json.loads(out.read_text())
+    assert report["verdict"] == gc.VERDICT_INCOMPLETE
+    assert any(f["code"] == "EVIDENCE_SOURCE_KIND_INVALID"
+               for f in report["findings"])
+
+
+def test_cli_writes_report_on_internal_error(tmp_path, monkeypatch):
+    """兜底：判定过程异常也必须落盘 INCOMPLETE 报告。"""
+    data = write_baseline(tmp_path, [req("REQ-1")])
+    write_cases(tmp_path, [case("TC-1", ["REQ-1"])])
+    write_scope(tmp_path, ["TC-1"])
+
+    def boom(*a, **k):
+        raise RuntimeError("injected failure")
+
+    monkeypatch.setattr(gc, "evaluate", boom)
+    out = tmp_path / "reports" / "merge-gate-report.json"
+    monkeypatch.setattr(sys, "argv", [
+        "gate_check.py", "--root", str(tmp_path), "--json",
+        "--candidate-sha", SHA_NEW, "--out", str(out),
+    ])
+    rc = gc.main()
+    assert rc == 1
+    assert out.is_file()
+    report = json.loads(out.read_text())
+    assert report["verdict"] == gc.VERDICT_INCOMPLETE
+    assert report["findings"][0]["code"] == "GATE_INTERNAL_ERROR"
+    assert "injected failure" in report["findings"][0]["detail"]

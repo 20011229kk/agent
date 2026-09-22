@@ -324,9 +324,16 @@ def load_runs(root, feature, run_id, gaps):
             gaps.append(Gap("ATTEMPT_ENTRY_INVALID", "GAP", str(path),
                             "attempt 缺少 node_id: {}".format(item)))
             continue
+        # attempt 允许为 None：重建器在"重复记录但顺序无依据"时刻意不给序号。
+        # int(None) 会直接抛异常，所以这里保留 None 并在聚合时按"顺序未知"处理。
+        raw_attempt = item.get("attempt", 1)
+        try:
+            attempt_no = None if raw_attempt is None else int(raw_attempt)
+        except (TypeError, ValueError):
+            attempt_no = None
         attempts.append(Attempt(
             node_id=str(item["node_id"]),
-            attempt=int(item.get("attempt", 1)),
+            attempt=attempt_no,
             status=str(item.get("status") or "unknown"),
             params=item.get("params"),
         ))
@@ -498,7 +505,12 @@ def build_report(root, feature, collected_path=None, run_id=None):
         key = "{}|{}".format(a.node_id, a.params if a.params is not None else "")
         attempts_by_key.setdefault(key, []).append(a)
     for key in attempts_by_key:
-        attempts_by_key[key].sort(key=lambda x: x.attempt)
+        seq = attempts_by_key[key]
+        # attempt 允许为 None（重建器在"顺序无依据"时刻意不给序号）。
+        # 直接 sort 会抛 TypeError；而且顺序未知时排序本身就没有意义 ——
+        # 保持原样，由下面的聚合逻辑判定为 ATTEMPT_ORDER_UNKNOWN。
+        if all(a.attempt is not None for a in seq):
+            seq.sort(key=lambda x: x.attempt)
 
     # ---- 逐 TC 四状态 ----
     per_case = {}
@@ -530,6 +542,29 @@ def build_report(root, feature, collected_path=None, run_id=None):
                 saw_unknown = True
                 continue
             exec_states.append(True)
+
+            # ---- 顺序是否可信：不可信就不算"末次" ----
+            # 同一 node_id|params 有多条记录时，必须有可信的顺序依据才能谈"末次结果"。
+            # 序号缺失或重复（例如都为 1）意味着顺序未知；此时若继续取列表最后一条，
+            # 结论会随输入排列改变 —— 同一组 failed/passed 换个顺序就从 INCOMPLETE 变 FAIL。
+            numbers = [a.attempt for a in seq]
+            order_known = (len(seq) == 1 or
+                           (all(n is not None for n in numbers) and
+                            len(set(numbers)) == len(numbers)))
+            if not order_known:
+                gaps.append(Gap(
+                    "ATTEMPT_ORDER_UNKNOWN", "BLOCKING", key,
+                    "同一测试有 {} 条结果但顺序无依据（序号缺失或重复）—— "
+                    "无法确定末次结果，不得据此判通过；需要框架的尝试序号/时间戳/"
+                    "运行来源，或由适配器显式声明顺序".format(len(seq))))
+                at_statuses[key] = "order_unknown"
+                saw_unknown = True
+                if any(s.status in ("failed", "error") for s in seq):
+                    # 观察到过失败：记录下来，但不把它当成"末次失败"
+                    at_statuses[key] = "order_unknown_with_observed_failure"
+                continue
+
+            seq = sorted(seq, key=lambda a: a.attempt)
             last = seq[-1]
             at_statuses[key] = last.status
             if last.status == "passed":

@@ -152,6 +152,16 @@ def write_evidence_source(root):
     path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
                     encoding="utf-8")
 
+    # tracker 来源还必须带导出清单：来源标签证明不了"导出内容是否漏带"
+    manifest = root / "qa" / "defects" / "export-manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({
+        "query_ref": "tracker://project=QA",
+        "exported_at": "2026-09-22T10:00:00+08:00",
+        "complete": True,
+        "records": [],
+    }), encoding="utf-8")
+
 
 @pytest.fixture()
 def repo(tmp_path):
@@ -453,3 +463,101 @@ def test_baseline_file_missing_meta_version_is_data_error(tmp_path):
 def test_baseline_file_not_found_is_data_error(tmp_path):
     version, bhash, err = rr.derive_baseline_binding(str(tmp_path / "nope.yaml"))
     assert version is None and "不存在" in err
+
+
+# --------------------------------------------------------------------------
+# 顺序未知必须传播到消费者：判定不得随输入排列改变（第五轮复核 P2）
+# --------------------------------------------------------------------------
+
+def _two_files_run(root, baseline_path, first_status, second_status, extra=None):
+    """写两份报告：first.xml / second.xml，各一条同 node_id 的结果。"""
+    raw = root / "qa" / "runs" / "R1" / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    for name, status in (("first.xml", first_status),
+                         ("second.xml", second_status)):
+        inner = '' if status == "passed" else '<failure message="x"/>'
+        (raw / name).write_text(
+            '<testsuite><testcase classname="%s" name="%s" time="0.01">%s'
+            '</testcase></testsuite>' % (JUNIT_CLASSNAME, JUNIT_NAME, inner),
+            encoding="utf-8")
+    return run_rebuild(root, raw, baseline_path, extra=extra)
+
+
+def test_verdict_is_stable_under_input_permutation(repo):
+    """同一组 failed/passed，仅交换输入排列，门禁结论必须一致。
+
+    复核实测：failed,passed → last_result=true/INCOMPLETE；
+              passed,failed → last_result=false/FAIL。
+    判定随文件排列改变，说明"顺序未知"没有传播到消费者。
+    """
+    root, baseline_path, bhash = repo
+    verdicts = set()
+    last_results = set()
+    for first, second in (("failed", "passed"), ("passed", "failed")):
+        proc, out = _two_files_run(root, baseline_path, first, second)
+        assert proc.returncode == 0, proc.stdout.decode()
+        rep = gc.evaluate(root, FEATURE, binding(bhash))
+        verdicts.add(rep.verdict)
+        last_results.add(rep.verified_scope["last_result"]["TC-1"])
+    assert len(verdicts) == 1, "门禁结论随输入排列改变: %s" % verdicts
+    assert last_results == {None}, \
+        "顺序未知时不得给出末次结果: %s" % last_results
+    assert verdicts == {gc.VERDICT_INCOMPLETE}, verdicts
+
+
+def test_order_unknown_surfaces_as_finding(repo):
+    root, baseline_path, bhash = repo
+    proc, out = _two_files_run(root, baseline_path, "failed", "passed")
+    assert proc.returncode == 0
+    run = json.loads(out.read_text())
+    # 顺序未知 → 不给序号，而不是都写 1
+    assert [a["attempt"] for a in run["attempts"]] == [None, None]
+    assert all(a.get("order_known") is False for a in run["attempts"])
+
+    rep = gc.evaluate(root, FEATURE, binding(bhash))
+    assert "ATTEMPT_ORDER_UNKNOWN" in [f.code for f in rep.findings]
+
+
+def test_declared_order_gives_stable_last_result(repo):
+    """显式声明顺序后，末次结果才成立，且与声明的顺序一致。"""
+    root, baseline_path, bhash = repo
+    proc, out = _two_files_run(root, baseline_path, "failed", "passed",
+                               extra=["--retry-order", "document-order"])
+    assert proc.returncode == 0
+    rep = gc.evaluate(root, FEATURE, binding(bhash))
+    assert rep.verified_scope["last_result"]["TC-1"] is True
+    assert "ATTEMPT_ORDER_UNKNOWN" not in [f.code for f in rep.findings]
+
+
+def test_declared_order_reversed_gives_failure(repo):
+    """声明顺序为 passed→failed 时末次是失败 —— 由声明决定，不由文件名决定。"""
+    root, baseline_path, bhash = repo
+    proc, out = _two_files_run(root, baseline_path, "passed", "failed",
+                               extra=["--retry-order", "document-order"])
+    assert proc.returncode == 0
+    rep = gc.evaluate(root, FEATURE, binding(bhash))
+    assert rep.verified_scope["last_result"]["TC-1"] is False
+
+
+def test_out_of_order_attempt_numbers_are_sorted(repo):
+    """序号乱序写入时按序号排序，不按出现顺序取末次。"""
+    root, baseline_path, bhash = repo
+    run_path = root / "qa" / "runs" / "R1" / "run.json"
+    run_path.parent.mkdir(parents=True, exist_ok=True)
+    run_path.write_text(json.dumps({
+        "run_id": "R1",
+        "candidate_sha": CANDIDATE,
+        "target_sha": TARGET,
+        "policy_version": POLICY,
+        "baseline_version": "1.0.0",
+        "baseline_hash": bhash,
+        "interrupted": False,
+        "config": {},
+        "attempts": [
+            {"node_id": NODE_ID, "attempt": 2, "status": "passed"},
+            {"node_id": NODE_ID, "attempt": 1, "status": "failed"},
+        ],
+    }), encoding="utf-8")
+    rep = gc.evaluate(root, FEATURE, binding(bhash))
+    assert rep.verified_scope["last_result"]["TC-1"] is True
+    assert "ATTEMPT_ORDER_UNKNOWN" not in [f.code for f in rep.findings]

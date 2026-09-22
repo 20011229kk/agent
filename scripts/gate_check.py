@@ -28,6 +28,7 @@ v1 只实现**完整性**规则，阈值项留配置位但不填任意数字 —
 """
 import argparse
 import dataclasses
+import hashlib
 import json
 import pathlib
 import sys
@@ -512,6 +513,14 @@ def check_evidence_sources(root, findings):
                 "EVIDENCE_SOURCE_KIND_ABSENT", "EVIDENCE_MISSING", kind_name,
                 "{} 未声明 kind".format(kind_name)))
             continue
+        if not isinstance(kind, str):
+            # 合法 YAML 但类型不对（例如 `kind: [tracker]`）。上一版直接拿它做集合成员
+            # 检查，抛 TypeError: unhashable type: 'list' —— 进程非零退出、报告不落盘，
+            # 调用方拿不到结构化结论。类型必须先查。
+            findings.append(Finding(
+                "EVIDENCE_SOURCE_KIND_INVALID", "EVIDENCE_MISSING", kind_name,
+                "{} 的 kind 必须是字符串，实际 {!r}".format(kind_name, kind)))
+            continue
         if kind == UNTRUSTED_KIND:
             findings.append(Finding(
                 "EVIDENCE_SOURCE_UNTRUSTED", "EVIDENCE_MISSING", kind_name,
@@ -525,11 +534,109 @@ def check_evidence_sources(root, findings):
                 "{} 的 kind={} 不在可信取值 {} 内".format(
                     kind_name, kind, sorted(trusted_values))))
             continue
-        if not entry.get("ref"):
+        if not isinstance(entry.get("ref"), str) or not entry.get("ref").strip():
             findings.append(Finding(
                 "EVIDENCE_SOURCE_REF_ABSENT", "EVIDENCE_MISSING", kind_name,
-                "{} 声明为可信来源 {} 但没有 ref —— 无法回溯到具体导出/运行".format(
-                    kind_name, kind)))
+                "{} 声明为可信来源 {} 但没有有效 ref（字符串）—— "
+                "无法回溯到具体导出/运行".format(kind_name, kind)))
+            continue
+
+        if kind_name == "defects" and kind == "tracker":
+            check_defect_export(root, findings)
+
+
+def check_defect_export(root, findings):
+    """缺陷导出的**完整性**，不只是来源标签。
+
+    外部复核指出上一版没关闭原来的反例：保持同一份 `tracker` 声明和 ref，仅在组装判定树
+    时漏掉缺陷目录，门禁仍然 `PASS / findings=[]`。因为"来源标签 + ref 非空"分不清
+    **成功导出零缺陷** 与 **导出内容漏带**。
+
+    所以 `kind: tracker` 还必须带一份导出清单 `qa/defects/export-manifest.json`：
+
+        {"query_ref": "...", "exported_at": "...", "complete": true,
+         "records": [{"id": "BUG-1", "sha256": "<该缺陷文件内容哈希>"}]}
+
+    判据：
+    - 清单缺失 → INCOMPLETE（不能用"目录是空的"推出"没有缺陷"）
+    - `complete` 不为 true → INCOMPLETE（导出本身没跑完）
+    - 清单里有、目录里没有 → INCOMPLETE（**这条就是漏带反例**）
+    - 目录里有、清单里没有 → INCOMPLETE（来源之外的记录，无法判断可信性）
+    - 哈希不符 → INCOMPLETE（导出后被改动）
+    - `records: []` + `complete: true` → 有效的空集合，放行
+    """
+    manifest_path = root / "qa" / "defects" / "export-manifest.json"
+    manifest = load_json(manifest_path)
+    if manifest is None:
+        findings.append(Finding(
+            "DEFECT_EXPORT_MANIFEST_ABSENT", "EVIDENCE_MISSING", str(manifest_path),
+            "声明缺陷来自 tracker，但没有导出清单 —— 无法区分"
+            "\"成功导出零缺陷\"与\"导出内容漏带\"。目录为空不等于没有阻断缺陷"))
+        return
+    if not isinstance(manifest, dict):
+        findings.append(Finding(
+            "DEFECT_EXPORT_MANIFEST_INVALID", "EVIDENCE_MISSING", str(manifest_path),
+            "导出清单不是对象"))
+        return
+
+    if manifest.get("complete") is not True:
+        findings.append(Finding(
+            "DEFECT_EXPORT_INCOMPLETE", "EVIDENCE_MISSING", str(manifest_path),
+            "导出清单 complete != true —— 导出未完成，不得据此判定零阻断"))
+
+    for field in ("query_ref", "exported_at"):
+        if not manifest.get(field):
+            findings.append(Finding(
+                "DEFECT_EXPORT_MANIFEST_FIELD_ABSENT", "EVIDENCE_MISSING",
+                str(manifest_path),
+                "导出清单缺少 {} —— 无法回溯导出范围".format(field)))
+
+    records = manifest.get("records")
+    if not isinstance(records, list):
+        findings.append(Finding(
+            "DEFECT_EXPORT_MANIFEST_INVALID", "EVIDENCE_MISSING", str(manifest_path),
+            "导出清单的 records 必须是列表（空列表表示显式空集合）"))
+        return
+
+    declared = {}
+    for rec in records:
+        if not isinstance(rec, dict) or not rec.get("id"):
+            findings.append(Finding(
+                "DEFECT_EXPORT_RECORD_INVALID", "EVIDENCE_MISSING",
+                str(manifest_path), "导出清单条目缺少 id: {}".format(rec)))
+            continue
+        declared[str(rec["id"])] = rec.get("sha256")
+
+    defects_dir = root / "qa" / "defects"
+    present = {}
+    if defects_dir.is_dir():
+        for path in sorted(defects_dir.glob("*.md")):
+            present[path.stem] = path
+
+    for did, expected_hash in sorted(declared.items()):
+        path = present.get(did)
+        if path is None:
+            findings.append(Finding(
+                "DEFECT_RECORD_MISSING", "EVIDENCE_MISSING", did,
+                "导出清单声明了缺陷 {} 但判定输入里没有该记录 —— "
+                "已确认阻断不得因为输入漏带而消失".format(did)))
+            continue
+        if expected_hash:
+            actual = "sha256:" + hashlib.sha256(
+                path.read_bytes()).hexdigest()
+            normalized = expected_hash if str(expected_hash).startswith("sha256:") \
+                else "sha256:" + str(expected_hash)
+            if actual != normalized:
+                findings.append(Finding(
+                    "DEFECT_RECORD_MODIFIED", "EVIDENCE_MISSING", did,
+                    "缺陷记录 {} 的内容与导出清单不符（清单 {}，实际 {}）".format(
+                        did, normalized, actual)))
+
+    for did in sorted(set(present) - set(declared)):
+        findings.append(Finding(
+            "DEFECT_RECORD_UNDECLARED", "EVIDENCE_MISSING", did,
+            "判定输入里存在缺陷记录 {} 但导出清单没有声明它 —— "
+            "来源不明的记录无法判断可信性".format(did)))
 
 
 def check_run_integrity(root, feature, binding, findings):
@@ -797,7 +904,35 @@ def main():
             "baseline_approval_ref": meta.get("baseline_approval_ref"),
             "human_approval_ref": args.human_approval_ref,
         }
-        rep = evaluate(root, feat, binding, guard_result=guard_result)
+        try:
+            rep = evaluate(root, feat, binding, guard_result=guard_result)
+        except Exception as exc:  # 兜底：崩溃也必须留下结构化结论
+            # 判定器自己异常退出时，CI 只能看到非零退出码，`if: always()` 的下游步骤
+            # 会读到旧报告或什么都读不到。崩溃不是判定，但"没有报告"更糟。
+            detail = "{}: {}".format(type(exc).__name__, exc)
+            payload = {
+                "verdict": VERDICT_INCOMPLETE,
+                "feature": feat,
+                "detail": "门禁判定过程异常，结论不可用",
+                "binding": {k: v for k, v in binding.items()},
+                "findings": [{
+                    "code": "GATE_INTERNAL_ERROR",
+                    "kind": "EVIDENCE_MISSING",
+                    "subject": feat,
+                    "detail": detail,
+                }],
+                "note": "本报告由异常兜底分支生成；verdict 固定为 INCOMPLETE。"
+                        "异常本身必须当缺陷修掉，不要靠重跑绕过。",
+            }
+            print(json.dumps(payload, indent=2, ensure_ascii=False)
+                  if args.json else "GATE_INTERNAL_ERROR: " + detail,
+                  file=sys.stderr if not args.json else sys.stdout)
+            if args.out:
+                out = pathlib.Path(args.out)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
+                               encoding="utf-8")
+            return 1
 
         if args.json:
             print(json.dumps(rep.as_dict(), indent=2, ensure_ascii=False))
