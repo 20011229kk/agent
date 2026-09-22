@@ -21,8 +21,12 @@
    （含 `export VAR=`、`for VAR in`、`read VAR`）
 4. runner 注入的内置变量（GITHUB_*、RUNNER_*、HOME 等）
 5. **当前这一处**使用 `${VAR:-default}` / `${VAR:+alt}` / `${VAR:=value}` /
-   `${VAR:?message}` 等参数展开保护；保护不传播到后续 `$VAR`。其中 `:=`/`=` 会在该
-   展开之后把变量标为已赋值，`:-`/`-` 不会。
+   `${VAR:?message}` 等参数展开保护；保护不传播到后续 `$VAR`。默认值右侧的普通
+   `$OTHER` 仍按展开顺序检查；其中 `:=`/`=` 只有在右侧引用检查完成后才把外层变量
+   标为已赋值，`:-`/`-` 不会。
+
+嵌套参数展开（如 `${X:-${Y:-fallback}}`）当前不可靠建模，必须显式产生
+`ENV_EXPANSION_UNSUPPORTED`，**不能静默 PASS**。
 
 本检查器刻意只承诺**线性词法顺序**：它按字符位置判断"引用前是否出现赋值"，
 不建模 `if/case` 分支支配关系、循环是否实际进入、函数调用、子 shell/命令替换的作用域、
@@ -131,18 +135,28 @@ def _command_end(script: str, start: int) -> int:
     return min(positions) if positions else len(script)
 
 
+def _unsupported_expansions(script: str):
+    """返回无法可靠建模的嵌套 `${...${...}...}` 位置。
+
+    当前解析器用正则识别最外层参数展开，无法正确配对任意嵌套大括号。与其静默漏掉
+    内层引用，不如明确返回 ENV_EXPANSION_UNSUPPORTED。普通 RHS `$Y` 已支持；
+    需要嵌套 `${Y:-...}` 时应使用真实 shell 检查或后续引入词法解析器。
+    """
+    return [m.start() for m in re.finditer(r"\$\{(?!\{)[^}]*\$\{(?!\{)", script)]
+
+
 def _script_events(script: str):
     """生成 `(位置, 优先级, kind, name)` 事件，按源码位置处理。
 
     priority：同一位置先处理 use，再处理 assignment，避免 RHS 引用被当前赋值提前满足。
     """
     events = []
-    braced_ranges = []
 
     # `${VAR...}`：每一处引用独立判断。安全默认值不会保护后续同名引用。
+    # 默认值 RHS 里的普通 `$Y` 由后面的 USE_PLAIN **照常收集**；不能把整个
+    # `${...}` 范围屏蔽掉，否则 `${X:-$Y}` 会漏掉 Y、`${X:=$X}` 会漏掉 RHS 的 X。
     for m in BRACED_PARAM.finditer(script):
         name, tail = m.group(1), m.group(2)
-        braced_ranges.append((m.start(), m.end()))
         op = _safe_param_operator(tail)
         if op is None:
             events.append((m.start(), 0, "use", name))
@@ -150,12 +164,13 @@ def _script_events(script: str):
             # `${X:=v}` 当前引用本身受保护，并在展开完成后赋值
             events.append((m.end(), 1, "assign", name))
 
-    # `$VAR`：跳过位于 `${...}` 或 `${{...}}` 内部的片段
+    # `$VAR`：只跳过位于 `${{...}}` Actions 表达式内部的片段。
+    # 位于 `${X:-$Y}` 里的 `$Y` **不能跳过**：外层 `:-` 只保护 X，不保护 Y。
     expression_ranges = [(m.start(), m.end()) for m in
                          re.finditer(r"\$\{\{.*?\}\}", script, re.S)]
     for m in USE_PLAIN.finditer(script):
         pos = m.start()
-        if any(a <= pos < b for a, b in braced_ranges + expression_ranges):
+        if any(a <= pos < b for a, b in expression_ranges):
             continue
         events.append((pos, 0, "use", m.group(1)))
 
@@ -177,8 +192,11 @@ def _script_events(script: str):
     return sorted(events, key=lambda x: (x[0], x[1], x[3]))
 
 
-def _undefined_uses(script: str, initially_visible):
-    """按源码位置返回 `[(name, line)]`，不把未来赋值提前生效。"""
+def _analyze_script(script: str, initially_visible):
+    """返回 `(undefined, unsupported)`。
+
+    undefined: `[(name, line)]`；unsupported: `[(construct, line)]`。
+    """
     visible = set(initially_visible)
     undefined = []
     seen = set()
@@ -190,7 +208,17 @@ def _undefined_uses(script: str, initially_visible):
             line = script.count("\n", 0, pos) + 1
             undefined.append((name, line))
             seen.add(name)
-    return undefined
+
+    unsupported = []
+    for pos in _unsupported_expansions(script):
+        unsupported.append(("nested_parameter_expansion",
+                            script.count("\n", 0, pos) + 1))
+    return undefined, unsupported
+
+
+def _undefined_uses(script: str, initially_visible):
+    """兼容内部调用：返回未定义引用；未支持语法由 `_analyze_script` 单独返回。"""
+    return _analyze_script(script, initially_visible)[0]
 
 
 def _github_env_writes(script: str):
@@ -227,13 +255,20 @@ def check_workflow(path: str):
                                                             allow_unicode=True)))
             if script:
                 # shell 引用按字符位置处理：未来赋值不能提前生效，默认值只保护当前引用。
-                for name, line_no in _undefined_uses(script, here):
+                undefined, unsupported = _analyze_script(script, here)
+                for name, line_no in undefined:
                     issues.append(Issue(
                         path, job_name, step_name, "ENV_USED_BEFORE_SET", name,
                         "第 {} 行读取，但在该词法位置之前既不在 workflow/job/step env，"
                         "也没有更早步骤写入 $GITHUB_ENV，本步骤此前也未赋值。"
                         "注意：本检查只保证线性词法顺序，不分析分支/子 shell/函数控制流".format(
                             line_no)))
+                for construct, line_no in unsupported:
+                    issues.append(Issue(
+                        path, job_name, step_name, "ENV_EXPANSION_UNSUPPORTED", construct,
+                        "第 {} 行包含嵌套参数展开 `${{...${{...}}...}}`，当前线性解析器"
+                        "无法可靠配对大括号与判断 RHS 引用；必须用真实 shell 检查或"
+                        "改写为受支持的普通 `$VAR` RHS，不能静默视为 PASS".format(line_no)))
                 # `${{ env.X }}` 在 shell 执行前由 Actions 展开，同步骤 shell 赋值救不了它
                 for name in sorted(expr_used):
                     if name not in here:

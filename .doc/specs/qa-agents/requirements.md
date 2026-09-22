@@ -94,7 +94,11 @@
   `DEFECT_EXPORT_SHA256_INVALID`。
 - workflow 变量静态检查 SHALL 按源码位置处理受支持的线性语法：未来赋值
   **SHALL NOT** 提前满足当前引用；`${X:-fallback}` 只保护当前展开，**SHALL NOT**
-  使后续裸 `$X` 可见；`${X:=fallback}` 可在展开后使后续引用可见。
+  使后续裸 `$X` 可见；`${X:=fallback}` 可在**右侧引用检查完成后**使后续引用可见。
+  默认值右侧的普通变量 SHALL 独立检查：`${X:-$Y}` 的外层保护 **SHALL NOT** 屏蔽
+  `$Y`，`${X:=$X}` 的赋值 **SHALL NOT** 提前满足其右侧 `$X`。
+- **IF** 参数展开包含当前解析器不能可靠建模的嵌套 `${...}`，**THEN** 检查器 SHALL
+  产生 `ENV_EXPANSION_UNSUPPORTED`，**SHALL NOT** 静默 PASS。
 - workflow 变量检查的 PASS SHALL 明确限定为"受支持语法中的线性词法顺序无先读后写"，
   **SHALL NOT** 表述为真实控制流可运行证明；分支支配、循环是否进入、函数调用、
   子 shell/命令替换作用域、`eval/source` 属未建模范围，关键步骤仍需真实 shell 故障路径验证。

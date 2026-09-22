@@ -341,3 +341,90 @@ def test_indented_assignment_before_use_is_recognized(tmp_path):
     wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
     assert cwe.check_workflow(wf) == []
     assert run_bash(script).returncode == 0
+
+
+# --------------------------------------------------------------------------
+# 第七轮复核：默认值 RHS 的引用不能被外层保护整体屏蔽
+# --------------------------------------------------------------------------
+
+
+def test_R_default_rhs_plain_variable_is_checked(tmp_path):
+    """`${X:-$Y}`：X 未定义时会展开右侧，Y 仍受 set -u 约束。
+
+    旧实现把整个 `${...}` 加进 braced_ranges，位于其中的 `$Y` 被跳过；检查器零问题，
+    真实 Bash 报 Y: unbound variable。
+    """
+    script = 'printf "%s" "${X:-$Y}"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    issues = cwe.check_workflow(wf)
+    assert names(issues) == ["Y"]
+    assert run_bash(script).returncode != 0
+
+
+def test_R_colon_equals_rhs_self_reference_checked_before_assignment(tmp_path):
+    """`${X:=$X}`：右侧 X 必须在 `:=` 给外层 X 赋值之前展开。"""
+    script = 'printf "%s" "${X:=$X}"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    issues = cwe.check_workflow(wf)
+    assert names(issues) == ["X"]
+    assert run_bash(script).returncode != 0
+
+
+def test_default_rhs_defined_variable_positive_control(tmp_path):
+    """阳性对照：先定义 Y，再用 `${X:-$Y}`，检查器与真实 Bash 都通过。"""
+    script = 'Y=ok\nprintf "%s" "${X:-$Y}"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+    proc = run_bash(script)
+    assert proc.returncode == 0
+    assert proc.stdout == b"ok"
+
+
+def test_default_rhs_multiple_plain_references_all_checked(tmp_path):
+    script = 'A=ok\nprintf "%s" "${X:-$A-$B-$C}"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert names(cwe.check_workflow(wf)) == ["B", "C"]
+    assert run_bash(script).returncode != 0
+
+
+def test_colon_equals_assignment_happens_after_rhs_then_propagates(tmp_path):
+    """RHS 引用已满足后，`:=` 才给 X 赋值；后续裸 X 可见。"""
+    script = 'Y=ok\nprintf "%s" "${X:=$Y}"\nprintf "%s" "$X"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert cwe.check_workflow(wf) == []
+    proc = run_bash(script)
+    assert proc.returncode == 0
+    assert proc.stdout == b"okok"
+
+
+def test_non_assigning_default_does_not_propagate_even_with_rhs(tmp_path):
+    script = 'Y=ok\nprintf "%s" "${X:-$Y}"\nprintf "%s" "$X"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    assert names(cwe.check_workflow(wf)) == ["X"]
+    assert run_bash(script).returncode != 0
+
+
+def test_nested_parameter_expansion_is_explicitly_unsupported(tmp_path):
+    """不能可靠配对嵌套大括号时必须报未支持，不能静默 PASS。"""
+    script = 'printf "%s" "${X:-${Y:-fallback}}"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    issues = cwe.check_workflow(wf)
+    assert "ENV_EXPANSION_UNSUPPORTED" in codes(issues), [str(i) for i in issues]
+
+
+def test_nested_parameter_expansion_remains_unsupported_when_inner_defined(tmp_path):
+    """即使当前环境恰好可运行，也不超出静态检查器保证范围。"""
+    script = 'Y=ok\nprintf "%s" "${X:-${Y}}"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    issues = cwe.check_workflow(wf)
+    assert "ENV_EXPANSION_UNSUPPORTED" in codes(issues)
+    assert run_bash(script).returncode == 0
+
+
+def test_unsupported_issue_reports_line(tmp_path):
+    script = 'echo ok\nprintf "%s" "${X:-${Y:-z}}"'
+    wf = write_wf(tmp_path, {"j": {"steps": [{"run": script}]}})
+    issues = [i for i in cwe.check_workflow(wf)
+              if i.code == "ENV_EXPANSION_UNSUPPORTED"]
+    assert len(issues) == 1
+    assert "第 2 行" in issues[0].detail

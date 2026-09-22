@@ -305,6 +305,9 @@ item 8（工具级委派写入）仍未闭环，且不能由 shell 包装器代�
       `${X:-fallback}` 只保护当前引用、`${X:=fallback}` 才传播赋值；新增真实
       `/bin/bash -c 'set -eu'` 对照。保证范围明确收窄为**线性词法顺序**，不建模分支、
       函数、子 shell、命令替换、`eval/source`，PASS 不冒充真实控制流可运行证明
+- [x] 默认值 RHS 引用检查（第七轮复核 P2）：`${X:-$Y}` 独立检查 Y，`${X:=$X}`
+      在外层赋值生效前检查 RHS 的 X；Y 先赋值为阳性对照。嵌套 `${X:-${Y:-z}}`
+      当前不能可靠配对大括号，显式报 `ENV_EXPANSION_UNSUPPORTED`，不静默 PASS
 - [ ] **CI 证据来源升级为可信（当前必然 INCOMPLETE，需要外部输入）**：
   - [ ] 执行层随原始产物上传 collect 清单（`kind: trusted_ci` + ref）
   - [ ] 缺陷记录改为从跟踪系统导出（`kind: tracker` + 查询/导出 ref）—— 需用户指定系统
