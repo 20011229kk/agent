@@ -32,8 +32,9 @@ def base_writer():
                 {"capability": "fs_write", "match": ["qa/cases/**"],
                  "effect": "allow"},
                 {"capability": "fs_write",
-                 "match": ["qa/baseline/**", "qa/plan/**", "scripts/**",
-                           "isolation/**", "tests/**", ".github/**"],
+                 "match": [".kiro/**", "qa/baseline/**", "qa/plan/**",
+                           "scripts/**", "isolation/**", "tests/**",
+                           ".github/**"],
                  "effect": "deny"},
             ]
         },
@@ -211,7 +212,8 @@ def test_write_paths_must_be_explicit_allow():
 
 
 @pytest.mark.parametrize("missing", ["qa/baseline/", "qa/plan/", "scripts/",
-                                     "isolation/", "tests/", ".github/"])
+                                     "isolation/", "tests/", ".github/",
+                                     ".kiro/"])
 def test_each_protected_prefix_must_be_denied(missing):
     cfg = base_writer()
     deny = cfg["permissions"]["rules"][1]
@@ -356,7 +358,8 @@ def test_real_qa_executor_denies_every_protected_prefix():
               if r["capability"] == "fs_write" and r["effect"] == "deny"
               for m in r["match"]]
     for prefix in va.PROTECTED_PREFIXES:
-        assert any(d.startswith(prefix) for d in denied), prefix
+        # 用 covers_prefix 而不是 startswith：只 deny 目录里某个文件不算覆盖
+        assert any(va.covers_prefix(d, prefix) for d in denied), prefix
 
 
 def test_real_configs_have_no_ask_effect():
@@ -380,3 +383,99 @@ def test_real_executor_shell_denies_destructive_commands():
               for m in r["match"]]
     for must in ("git push", "git commit", "rm -rf", "sudo"):
         assert any(d.startswith(must) for d in denied), must
+
+
+# --------------------------------------------------------------------------
+# 外部复核实测出的三处过弱判据 / 崩溃 —— 永久回归
+# --------------------------------------------------------------------------
+
+def test_R1_deny_single_file_does_not_count_as_covering_directory():
+    """把每个受保护目录的 deny 缩成只 deny 一个文件，当时零 findings。
+
+    存在一条同目录规则 ≠ 该目录被完整拒绝。
+    """
+    cfg = base_writer()
+    cfg["permissions"]["rules"][1]["match"] = [
+        "qa/baseline/one-file.txt", "qa/plan/one-file.txt",
+        "scripts/one-file.txt", "isolation/one-file.txt",
+        "tests/one-file.txt", ".github/one-file.txt", ".kiro/one-file.txt",
+    ]
+    found = codes(check(cfg))
+    assert found.count("PROTECTED_PATH_NOT_DENIED") == 7, found
+
+
+def test_R2_overbroad_allow_is_rejected():
+    """把 allow 改成 `**`，当时零 findings。"""
+    cfg = base_writer()
+    cfg["permissions"]["rules"][0]["match"] = ["**"]
+    found = codes(check(cfg))
+    assert "ALLOW_OVERBROAD" in found, found
+
+
+@pytest.mark.parametrize("pattern", ["*", "/**", "./**", "**/*"])
+def test_other_overbroad_patterns_rejected(pattern):
+    cfg = base_writer()
+    cfg["permissions"]["rules"][0]["match"] = [pattern]
+    assert "ALLOW_OVERBROAD" in codes(check(cfg))
+
+
+def test_allow_outside_role_scope_rejected():
+    """写别的角色的产物目录也要拒绝，哪怕它不在受保护清单里。"""
+    cfg = base_writer()          # qa-design
+    cfg["permissions"]["rules"][0]["match"] = ["qa/defects/**"]
+    found = codes(check(cfg))
+    assert "ALLOW_OUTSIDE_ROLE_SCOPE" in found, found
+
+
+def test_unknown_writable_role_must_declare_scope():
+    cfg = base_writer()
+    cfg["name"] = "qa-newcomer"
+    found = codes(check(cfg, "qa-newcomer.json"))
+    assert "ROLE_WRITE_SCOPE_UNDECLARED" in found
+
+
+def test_R3_malformed_tools_entry_does_not_crash():
+    """tools=[{}] 当时抛 TypeError: unhashable type: dict，而不是输出违规。"""
+    cfg = base_writer()
+    cfg["tools"] = ["read", "write", {}]
+    found = codes(check(cfg))       # 不得抛异常
+    assert "TOOL_ENTRY_NOT_STRING" in found, found
+
+
+@pytest.mark.parametrize("bad", [123, None, [], {"a": 1}])
+def test_various_malformed_tool_entries(bad):
+    cfg = base_writer()
+    cfg["tools"] = ["read", "write", bad]
+    assert "TOOL_ENTRY_NOT_STRING" in codes(check(cfg))
+
+
+def test_malformed_match_entry_does_not_crash():
+    cfg = base_writer()
+    cfg["permissions"]["rules"][0]["match"] = [{"nested": True}, "qa/cases/**"]
+    found = codes(check(cfg))       # 不得抛异常
+    assert "WRITE_PATHS_NOT_EXPLICIT" not in found
+
+
+# --------------------------------------------------------------------------
+# covers_prefix 的判定表
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("pattern,prefix,expected", [
+    ("qa/baseline/**", "qa/baseline/", True),
+    ("qa/baseline/*", "qa/baseline/", True),
+    ("qa/baseline", "qa/baseline/", True),
+    ("qa/baseline/", "qa/baseline/", True),
+    ("qa/**", "qa/baseline/", True),          # 上层递归通配也算覆盖
+    ("qa/baseline/one.txt", "qa/baseline/", False),
+    ("qa/baselines/**", "qa/baseline/", False),   # 相近目录名不得误算
+    ("", "qa/baseline/", False),
+    ("other/**", "qa/baseline/", False),
+])
+def test_covers_prefix_table(pattern, prefix, expected):
+    assert va.covers_prefix(pattern, prefix) is expected
+
+
+def test_real_configs_still_pass_after_stricter_rules():
+    """判据加严之后真实配置必须仍然合规——否则说明配置本身写松了。"""
+    paths, findings = va.validate_dir(REAL_DIR)
+    assert findings == [], [str(f) for f in findings]

@@ -13,6 +13,7 @@
       {
         "capability": "fs_write",
         "match": [
+          ".kiro/**",
           "qa/baseline/**",
           "qa/plan/**",
           "qa/runs/**",

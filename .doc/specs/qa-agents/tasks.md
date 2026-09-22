@@ -273,7 +273,21 @@ item 8（工具级委派写入）仍未闭环，且不能由 shell 包装器代�
 ### [ ] Task 5 — `qa-executor`
 
 - [ ] 对接真实测试框架（**阻塞于用户提供 v1 场景仓库**）
-- [ ] `scripts/rebuild_run_json.py`：把框架原生报告转成门禁输入并绑定六字段
+- [x] `scripts/rebuild_run_json.py` — 2026-09-22 实现（43 项单测 + 20 项集成测试）：
+      JUnit XML → `run.json`，六字段版本绑定缺一即拒且不接受空串；`baseline_version` /
+      `baseline_hash` 由 `--baseline-file` 从受保护版本的 `requirements.yaml` 推出，
+      **算法复用 `trace_matrix.compute_baseline_hash`**（两套实现必然漂移，正是"有真实
+      基线也对不上"的来源）；`node_id` 按 `--node-id-strategy` 映射（`pytest`/`raw`/`map`），
+      参数化后缀拆入 `params`，同一 node_id 重复出现视为重试并递增 `attempt`；
+      `skipped` 既不算 failed 也不算 passed；解析失败、零 testcase 的空报告、映射不出
+      node_id 三种情况都置 `interrupted=true`（下游消费的是这个字段）
+- [x] **集成测试 JUnit → rebuild → trace → gate**（`tests/test_integration_junit_to_gate.py`）
+      —— 单测只证明转换器自己的输出约定，证明不了与下游对得上。首版就是这样：输出
+      `attempt_id` 与嵌套 `version_binding`，而下游读 `node_id` 与顶层字段，整条链路断开
+      而单测全绿。现在断言的对象是门禁最终结论：正例 PASS；一份好报告 + 一份损坏/空报告
+      必须 INCOMPLETE；映射策略错必须不通过；失败是 FAIL 而 skip 是 INCOMPLETE；
+      运行后改基线必须 EVIDENCE_STALE
+- [ ] 对接真实测试框架的 collect/执行两步（**仍阻塞于用户提供 v1 场景仓库**）
       （已纳入 CODEOWNERS —— 改它等于改证据来源）
 
 ### [~] Task 7 — 评审链路与三层执行落地

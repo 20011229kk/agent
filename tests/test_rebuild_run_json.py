@@ -70,7 +70,7 @@ def test_passed_failed_error_skipped_mapping(tmp_path):
         {"name": "later", "inner": '<skipped message="needs device"/>'},
     ])
     run = rr.build([p], BINDING)
-    got = {a["attempt_id"].split("::")[1]: a["status"] for a in run["attempts"]}
+    got = {a["node_id"].rsplit("::", 1)[1]: a["status"] for a in run["attempts"]}
     assert got == {"ok": "passed", "bad": "failed", "boom": "error",
                    "later": "skipped"}
     assert run["counts"] == {"passed": 1, "failed": 1, "error": 1, "skipped": 1}
@@ -100,18 +100,24 @@ def test_failure_wins_over_skipped(tmp_path):
     assert run["attempts"][0]["status"] == "failed"
 
 
-def test_attempt_id_uses_classname_and_name(tmp_path):
+def test_node_id_mapped_from_classname_and_name(tmp_path):
+    """下游读的字段是 node_id，且 pytest 策略会把 classname 转成文件路径。
+
+    第一版输出 attempt_id="a.b.C::t1"，trace_matrix 全部判 ATTEMPT_ENTRY_INVALID 跳过。
+    """
     p = write_junit(tmp_path / "junit.xml",
                     [{"name": "t1", "classname": "a.b.C"}])
     run = rr.build([p], BINDING)
-    assert run["attempts"][0]["attempt_id"] == "a.b.C::t1"
+    assert "attempt_id" not in run["attempts"][0]
+    assert run["attempts"][0]["node_id"] == "a/b.py::C::t1"
 
 
-def test_attempt_id_without_classname(tmp_path):
+def test_node_id_without_classname(tmp_path):
     (tmp_path / "j.xml").write_text(
         '<testsuite><testcase name="solo"/></testsuite>')
     run = rr.build([str(tmp_path / "j.xml")], BINDING)
-    assert run["attempts"][0]["attempt_id"] == "solo"
+    assert run["attempts"][0]["node_id"] == "solo"
+    assert any("NO_CLASSNAME" in n for n in run["mapping_notes"])
 
 
 def test_duration_parsed_and_bad_duration_tolerated(tmp_path):
@@ -120,7 +126,7 @@ def test_duration_parsed_and_bad_duration_tolerated(tmp_path):
         {"name": "b", "time": "not-a-number"},
     ])
     run = rr.build([p], BINDING)
-    durations = {a["attempt_id"].split("::")[1]: a["duration_s"]
+    durations = {a["node_id"].rsplit("::", 1)[1]: a["duration_s"]
                  for a in run["attempts"]}
     assert durations["a"] == 1.25
     assert durations["b"] is None
@@ -164,36 +170,101 @@ def test_sources_record_hash_per_file(tmp_path):
     assert src["error"] is None
 
 
-def test_version_binding_is_copied_verbatim(tmp_path):
+def test_version_binding_is_emitted_at_top_level(tmp_path):
+    """绑定字段必须在**顶层**：gate_check.check_run_integrity 读的就是顶层。
+
+    第一版放在嵌套的 version_binding 里，导致 RUN_CANDIDATE_SHA_ABSENT 等全部报缺。
+    """
     p = write_junit(tmp_path / "junit.xml", [{"name": "ok"}])
     run = rr.build([p], BINDING)
-    assert run["version_binding"] == {
-        "candidate_sha": BINDING["candidate_sha"],
-        "target_sha": BINDING["target_sha"],
-        "policy_version": BINDING["policy_version"],
-        "baseline_version": BINDING["baseline_version"],
-        "baseline_hash": BINDING["baseline_hash"],
-    }
+    assert "version_binding" not in run
+    for field in ("candidate_sha", "target_sha", "policy_version",
+                  "baseline_version", "baseline_hash"):
+        assert run[field] == BINDING[field], field
+
+
+def test_interrupted_field_is_emitted_for_downstream(tmp_path):
+    """下游用 interrupted 判"证据不完整不得通过"；只写自造的 incomplete 没有消费者。"""
+    p = write_junit(tmp_path / "junit.xml", [{"name": "ok"}])
+    clean = rr.build([p], BINDING)
+    assert clean["interrupted"] is False
+
+    bad = tmp_path / "bad.xml"
+    bad.write_text("<testsuite><unclosed>")
+    dirty = rr.build([p, str(bad)], BINDING)
+    assert dirty["interrupted"] is True
+    assert dirty["incomplete"] is True
+
+
+def test_config_field_present_and_empty_for_redaction_scan(tmp_path):
+    """gate_check 会扫 config 找凭据痕迹，字段必须存在。"""
+    p = write_junit(tmp_path / "junit.xml", [{"name": "ok"}])
+    run = rr.build([p], BINDING)
+    assert run["config"] == {}
+
+
+def test_empty_but_valid_report_is_flagged(tmp_path):
+    """合法但零 testcase 的报告（分片丢结果）必须记为证据缺口。
+
+    只在"聚合后一条 attempt 都没有"时才报 NO_ATTEMPTS 会漏掉"一份好报告 + 一份空报告"。
+    """
+    good = write_junit(tmp_path / "good.xml", [{"name": "ok"}])
+    (tmp_path / "empty.xml").write_text("<testsuite></testsuite>")
+    run = rr.build([good, str(tmp_path / "empty.xml")], BINDING)
+    assert run["counts"] == {"passed": 1}
+    assert run["interrupted"] is True
+    assert any("EMPTY_REPORT" in r for r in run["incomplete_reasons"])
 
 
 # --------------------------------------------------------------------------
 # 脱敏
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("raw,leaked", [
-    ('password=hunter2', 'hunter2'),
-    ('token: abcd1234efgh', 'abcd1234efgh'),
-    ('api_key=XYZ987', 'XYZ987'),
-    ('postgres://user:pass@db:5432/x', 'pass@db'),
-    ('Authorization: Bearer zzz', 'Bearer zzz'),
+# 全部为合成 canary，不是真实凭据。断言的是**凭据值本身**不再出现，
+# 而不是"某个前缀不见了"——上一版断言 'Bearer zzz' 整串不出现，结果正则只吃掉了
+# Bearer，凭据值 zzz 原样留在输出里，测试照样通过。判据比被测对象弱的又一例。
+CANARY = "CANARY7f3a9b2c4d"
+
+
+@pytest.mark.parametrize("raw", [
+    'password=%s' % CANARY,
+    'passwd: %s' % CANARY,
+    'token: %s' % CANARY,
+    'api_key=%s' % CANARY,
+    'secret=%s' % CANARY,
+    'Authorization: Bearer %s' % CANARY,
+    'authorization=%s' % CANARY,
+    'Bearer %s' % CANARY,
+    'Basic %s' % CANARY,
+    'cookie: session=%s' % CANARY,
+    'postgres://user:%s@db:5432/x' % CANARY,
 ])
-def test_sensitive_values_are_redacted(tmp_path, raw, leaked):
+def test_credential_value_itself_is_removed(tmp_path, raw):
     p = write_junit(tmp_path / "junit.xml", [
         {"name": "t", "inner": '<failure message="%s"/>' % raw}])
     run = rr.build([p], BINDING)
     msg = run["attempts"][0]["message"]
-    assert leaked not in msg, msg
-    assert "redacted" in msg
+    assert CANARY not in msg, "凭据值仍在输出里: %r" % msg
+    # 同时确认整份 run.json 里任何位置都没有残留
+    assert CANARY not in json.dumps(run, ensure_ascii=False)
+
+
+def test_redaction_marks_where_it_acted(tmp_path):
+    p = write_junit(tmp_path / "junit.xml", [
+        {"name": "t", "inner": '<failure message="token: %s"/>' % CANARY}])
+    run = rr.build([p], BINDING)
+    assert "redacted" in run["attempts"][0]["message"]
+
+
+def test_authorization_scheme_alone_is_not_enough(tmp_path):
+    """回归：只删掉 Bearer 而留下凭据值的写法必须被判失败。"""
+    p = write_junit(tmp_path / "junit.xml", [
+        {"name": "t",
+         "inner": '<failure message="Authorization: Bearer %s"/>' % CANARY}])
+    run = rr.build([p], BINDING)
+    msg = run["attempts"][0]["message"]
+    assert CANARY not in msg
+    assert "Bearer %s" % CANARY not in msg
 
 
 def test_long_message_truncated(tmp_path):

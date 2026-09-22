@@ -54,7 +54,21 @@ PROTECTED_PREFIXES = [
     "isolation/",
     "tests/",
     ".github/",
+    ".kiro/",
 ]
+
+# 每个角色**允许**的写入范围。没有这张表，`allow: ["**"]` 也能过——
+# 外部复核实测：把 qa-design 的 allow 改成 `**`，校验器零 findings。
+# "deny 了受保护路径"不等于"只写自己该写的"：受保护清单之外还有别的角色的产物。
+ROLE_WRITE_SCOPE = {
+    "qa-design": ["qa/cases/**"],
+    # 测试代码目录是**被测项目**的路径，不在本仓库内；接入具体项目时在这里登记，
+    # 不要用通配放行。
+    "qa-executor": ["qa/runs/**/interpretation.*", "qa/defects/**"],
+}
+
+# 过于宽泛、一律拒绝的写入模式
+OVERBROAD_PATTERNS = {"**", "*", "/**", "./**", "**/*"}
 
 CAPABILITIES = {"fs_read", "fs_write", "shell", "web_search", "execute_bash"}
 EFFECTS = {"allow", "deny", "ask"}
@@ -82,7 +96,54 @@ def _matches(rule: dict) -> list:
     m = rule.get("match")
     if isinstance(m, str):
         return [m]
-    return m if isinstance(m, list) else []
+    if not isinstance(m, list):
+        return []
+    # 只保留字符串项：非字符串会让下面的 startswith/集合运算抛异常，
+    # 校验器崩掉比漏报更糟（调用方看到的是异常而不是判定）
+    return [x for x in m if isinstance(x, str)]
+
+
+def covers_prefix(pattern: str, prefix: str) -> bool:
+    """判断一条 deny 模式是否**整体覆盖**某个受保护目录。
+
+    第一版用 `pattern.startswith(prefix)`，于是 `deny qa/baseline/one-file.txt`
+    也算"已拒绝 qa/baseline/"——外部复核把每个受保护目录的 deny 缩成单个文件，
+    校验器仍然零 findings。存在一条同目录规则 ≠ 该目录被完整拒绝。
+
+    认可的覆盖写法（prefix 形如 `qa/baseline/`）：
+      qa/baseline/**   qa/baseline/*   qa/baseline   qa/baseline/
+    更上层的覆盖也算：`qa/**` 覆盖 `qa/baseline/`。
+    """
+    p = pattern.strip()
+    base = prefix.rstrip("/")
+    if p in (base, base + "/"):
+        return True
+    for suffix in ("/**", "/*"):
+        if p == base + suffix:
+            return True
+    # 上层目录的递归通配
+    if p.endswith("/**"):
+        ancestor = p[:-3]
+        if ancestor and (base == ancestor or base.startswith(ancestor + "/")):
+            return True
+    return False
+
+
+def _glob_covered_by(pattern: str, allowed: list) -> bool:
+    """写入模式是否落在该角色声明的允许范围内。
+
+    保守判定：要么与某条允许模式完全相同，要么是它的子路径（允许模式以 /** 结尾时）。
+    判不出来就算不通过 —— 这里宁可误报，也不要靠字符串前缀推导 glob 覆盖关系。
+    """
+    p = pattern.strip()
+    for a in allowed:
+        if p == a:
+            return True
+        if a.endswith("/**"):
+            root = a[:-3]
+            if p == root or p.startswith(root + "/"):
+                return True
+    return False
 
 
 def check_config(path: str, cfg: dict) -> list:
@@ -103,6 +164,14 @@ def check_config(path: str, cfg: dict) -> list:
     if not isinstance(tools, list) or not tools:
         findings.append(Finding(path, "TOOLS_MISSING", "tools 必须是非空列表"))
         tools = []
+
+    # 元素类型先查：非字符串项会让后续集合运算抛 TypeError
+    # （实测 tools=[{}] → unhashable type: dict）。崩溃不是判定。
+    bad_typed = [t for t in tools if not isinstance(t, str)]
+    for t in bad_typed:
+        findings.append(Finding(path, "TOOL_ENTRY_NOT_STRING",
+                                "tools 含非字符串项: %r" % (t,)))
+    tools = [t for t in tools if isinstance(t, str)]
 
     for tool in tools:
         if tool in KNOWN_INVALID_TOOLS:
@@ -185,11 +254,12 @@ def check_config(path: str, cfg: dict) -> list:
         denied = [m for r in rules if r.get("capability") == "fs_write"
                   and r.get("effect") == "deny" for m in _matches(r)]
         for prefix in PROTECTED_PREFIXES:
-            if not any(d.startswith(prefix) for d in denied):
+            if not any(covers_prefix(d, prefix) for d in denied):
                 findings.append(Finding(
                     path, "PROTECTED_PATH_NOT_DENIED",
-                    "未 deny 受保护路径 %s*（工具层这一道不能省；注意 item 5 已证明 "
-                    "shell 可绕过它，真正边界靠执行隔离与受保护分支）" % prefix))
+                    "未**整体**deny 受保护路径 %s（只 deny 其中某个文件不算；"
+                    "工具层这一道不能省，但注意 item 5 已证明 shell 可绕过它，"
+                    "真正边界靠执行隔离与受保护分支）" % prefix))
 
         # 写路径不得落在受保护路径内
         for a in allow_paths:
@@ -198,6 +268,29 @@ def check_config(path: str, cfg: dict) -> list:
                     findings.append(Finding(
                         path, "ALLOW_INSIDE_PROTECTED",
                         "allow 的写路径 %r 落在受保护路径 %s* 内" % (a, prefix)))
+
+        # 过于宽泛的写入模式一律拒绝
+        for a in allow_paths:
+            if a.strip() in OVERBROAD_PATTERNS:
+                findings.append(Finding(
+                    path, "ALLOW_OVERBROAD",
+                    "allow 模式 %r 过于宽泛：它会覆盖别的角色的产物，"
+                    "也让受保护清单之外的路径失去约束" % a))
+
+        # 必须落在该角色声明的写入范围内
+        scope = ROLE_WRITE_SCOPE.get(name)
+        if scope is None:
+            findings.append(Finding(
+                path, "ROLE_WRITE_SCOPE_UNDECLARED",
+                "角色 %r 没有在 validate_agents.ROLE_WRITE_SCOPE 里声明写入范围；"
+                "新增可写角色必须先登记范围，否则没有判据可查" % name))
+        else:
+            for a in allow_paths:
+                if not _glob_covered_by(a, scope):
+                    findings.append(Finding(
+                        path, "ALLOW_OUTSIDE_ROLE_SCOPE",
+                        "allow 的写路径 %r 超出角色 %r 声明的范围 %s"
+                        % (a, name, scope)))
 
     # allowedTools 是 CLI-only 字段；若出现必须是 tools 的子集
     allowed_tools = cfg.get("allowedTools")

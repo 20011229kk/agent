@@ -466,3 +466,79 @@ item 7 实测父代理 deny 按交集传播，会把子代理该有的写权限�
    这三项需要仓库管理员权限，我做不了。
 5. **补充证据**：写入 PID 归属需 `sudo` 级内核追踪；原始采样仍只在本地 `/tmp`，
    长期受控 artifact 存储未交付。
+
+### 第三轮复核：新实现的接口不兼容与弱判据，五条全修（2026-09-22）
+
+核对 `593cbf4` 的独立复核判"新实现存在阻断缺陷，暂不能认定门禁证据链已接通"。五条全部成立，
+其中两条是我上一轮自己引入的。
+
+**P1 转换结果与下游消费接口不兼容（最严重）**
+
+我写 `rebuild_run_json.py` 时没读消费方的契约：输出 `attempts[].attempt_id` 与嵌套
+`version_binding{...}`，而 `trace_matrix.load_runs` 读 `attempts[].node_id`、
+`gate_check.check_run_integrity` 读**顶层** `candidate_sha`/`baseline_version`/`baseline_hash`。
+后果是所有 attempt 被判 `ATTEMPT_ENTRY_INVALID` 跳过、绑定字段全报 ABSENT——**32 项单测全绿，
+整条证据链根本没接通**。复核用真实调用链替换运行记录后直接得到 INCOMPLETE 与六个 finding。
+
+修复：按真实契约输出（顶层绑定字段 + `node_id` + `attempt` + `params` + `interrupted` + `config`）。
+并且 `node_id` 不是改字段名就完事——JUnit 的 `classname::name` 不等于框架 collect 的 node_id，
+新增 `--node-id-strategy`（`pytest` 把 `tests.test_x` / `test_y[1-2]` 映射为
+`tests/test_x.py::test_y` + `params=1-2`；`raw` 原样；`map` 只认显式映射表，命中不到就报
+`NODE_ID_UNMAPPED` 而不是猜）。
+
+**新增 20 项集成测试**（`tests/test_integration_junit_to_gate.py`），断言的对象是门禁最终结论：
+正例整链 PASS；一份好报告 + 一份损坏报告必须 INCOMPLETE；映射策略错必须不通过；
+失败是 FAIL 而 skip 是 INCOMPLETE；运行后改基线必须 `EVIDENCE_STALE`；重试序号递增。
+
+**P1 `incomplete` 标记没有下游消费者**
+
+下游判"证据不完整不得通过"用的是 `interrupted`，我却只写了自造的 `incomplete`。修复：
+两个字段同时写，`interrupted` 供既有消费者。集成测试里顺带逮到一个我没想到的缺口：
+**一份合法但零 testcase 的报告**（分片丢结果）原先被静默忽略，"好报告 + 空报告"仍判 PASS。
+现在按文件记 `EMPTY_REPORT`。
+
+**P1 Authorization 脱敏保留了凭据值**
+
+正则 `authorization:\s*\S+` 只吃掉授权方案 `Bearer`，凭据值原样留下；而我的测试断言的是
+"Bearer zzz"整串不出现——Bearer 被删掉就算过。**判据比被测对象弱，这已经是第三次同类**。
+修复：整行吃掉 Authorization/cookie 的值，另加裸 `Bearer`/`Basic` 凭据模式；测试改为用合成
+canary 断言**凭据值本身**不出现在整份 `run.json` 的任何位置，并补一条专门盯"只删前缀"的回归。
+
+**P1/P2 角色校验器判据过弱 + 畸形输入崩溃**
+
+- `startswith(prefix)` 让 `deny qa/baseline/one-file.txt` 也算"已拒绝该目录"。复核把每个
+  受保护目录的 deny 缩成单个文件，校验器零 findings。改为 `covers_prefix()`：只认
+  `dir/**`、`dir/*`、`dir` 或上层递归通配，并有 9 项判定表测试（含 `qa/baselines/**` 不得
+  误算成覆盖 `qa/baseline/`）。
+- `allow: ["**"]` 也零 findings。新增按角色声明的写入范围表 `ROLE_WRITE_SCOPE` +
+  `ALLOW_OVERBROAD` / `ALLOW_OUTSIDE_ROLE_SCOPE` / `ROLE_WRITE_SCOPE_UNDECLARED`：
+  deny 了受保护路径 ≠ 只写自己该写的，受保护清单之外还有别的角色的产物。
+- `tools=[{}]` 抛 `TypeError: unhashable type: dict`。先查元素类型再做集合运算；
+  `match` 里的非字符串项同样先过滤。
+- 判据加严后**逮到真实配置的实际缺口**：`.kiro/**`（角色配置自身）没被 deny，已补。
+
+**P1 CI 链路的契约与隔离问题**
+
+1. `baseline_version` 原先用 `qa/baseline` 的 git tree SHA、`baseline_hash` 用文件哈希清单的
+   哈希，与消费者的 `meta.baseline_version` 和规范化内容 `sha256:...` 是两套契约。改为
+   `--baseline-file` 走同一套算法。
+2. 导出了 `.gate-policy` 却仍用 `--root .` 跑 trace/gate，读的还是候选 checkout 的
+   `qa/baseline`/`qa/plan`——导出了没消费。改为组装 `.gate-root`（受保护侧：脚本 + 规则 +
+   基线；候选侧：用例 + collect），判定一律以它为 `--root`。
+3. `find ... | head -1` 只取一份 raw 目录，分片一多就静默漏结果。改为把所有分片作为多个
+   `--raw` 传入；产物下载到专属 `ci-artifacts/raw`，不再落进 `qa/runs/`（避免与候选自带产物混淆）。
+4. 重建失败时后续步骤没有 `always()`，门禁被跳过——job 会红，但**不会产出**所宣称的
+   INCOMPLETE 报告。改为 `continue-on-error` + 后续步骤 `if: always()`。
+5. `git cat-file -e $TARGET_SHA:qa/baseline` 判目录存在，而只有 `.gitkeep` 的目录同样存在。
+   改为查找有效的 `requirements.yaml`。
+
+另外在 workflow 头部写明：**本 workflow 从未在远端实际运行过**（当前提交 Actions runs 为 0），
+以上是静态调用链上已修正的问题，不等于端到端跑通。
+
+**验证**：`make check` = 181 项结构校验 PASS + 角色配置校验 PASS + **446 项测试通过**；
+workflow YAML 可解析。
+
+**这一轮的教训（与前两轮同源，但换了一层）**：前两轮的教训是"判据比被测对象弱"，这一轮多了
+一条——**新写的组件必须按消费方的契约写，并用跨组件的集成测试证明**。我为转换器写了 32 项
+单测，它们全部只验证"我打算输出什么"，没有一项验证"下游能不能用"。单测数量在这类缺陷面前
+完全没有信息量。

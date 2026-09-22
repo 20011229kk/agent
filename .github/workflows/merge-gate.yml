@@ -107,78 +107,114 @@ jobs:
 
       - run: pip install -r requirements-ci.txt
 
-      - name: 下载原始产物
+      - name: 下载原始产物（落到专属空目录，避免与候选 checkout 混淆）
         uses: actions/download-artifact@v4
         continue-on-error: true    # 产物缺失本身就是证据不完整 → INCOMPLETE
         with:
           name: raw-test-artifacts
-          path: qa/runs/
+          # 刻意不下到 qa/runs/：候选 checkout 里可能自带 qa/runs/*/raw，
+          # 混在一起就分不清哪份是可信执行产出的。
+          path: ci-artifacts/raw
 
-      - name: 取受保护版本的门禁规则
+      - name: 组装可信判定树（受保护的规则与基线 + 候选的用例与重建产物）
         run: |
           set -euo pipefail
-          # 规则、重试策略、review_mode 必须取 **target_sha 上已批准的版本**，
-          # 不能用候选分支里的版本 —— 否则候选可以用自带的新规则给自己放行。
+          # 规则、重试策略、review_mode、需求基线必须取 **target_sha 上已批准的版本**，
+          # 不能用候选分支里的版本 —— 否则候选可以用自带的新规则或改小的分母给自己放行。
+          #
+          # 上一版只把它们导出到 .gate-policy，但 trace/gate 仍用 --root . 跑，
+          # 读的还是候选 checkout 里的 qa/baseline 与 qa/plan：导出了却没消费，
+          # "可信脚本"不等于"可信规则与分母已生效"。现在组装一棵判定树并用它当 --root。
           TARGET_SHA=$(git rev-parse "origin/${{ github.base_ref }}")
           echo "TARGET_SHA=$TARGET_SHA" >> "$GITHUB_ENV"
           echo "CANDIDATE_SHA=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_ENV"
-          mkdir -p .gate-policy
-          git archive "$TARGET_SHA" qa/plan scripts \
-            | tar -x -C .gate-policy
-          # policy_version 用受保护版本中门禁相关路径的树哈希，可复核、可追溯
+
+          rm -rf .gate-root
+          mkdir -p .gate-root
+          # 受保护侧：判定脚本 + 门禁规则 + 需求基线
+          git archive "$TARGET_SHA" scripts qa/plan qa/baseline | tar -x -C .gate-root
+          # 候选侧：用例（qa-design 的产出，本就属于候选变更）
+          if [ -d qa/cases ]; then
+            mkdir -p .gate-root/qa
+            cp -R qa/cases .gate-root/qa/
+          fi
+          # 候选侧：collect 清单（由可信执行层产出，随原始产物一起来更好；
+          # 暂无独立产物时退回候选副本，并在报告里以 automation_evidence 体现来源风险）
+          if [ -d qa/trace ]; then
+            cp -R qa/trace .gate-root/qa/ || true
+          fi
+
           POLICY_VERSION=$(git rev-parse "$TARGET_SHA:qa/plan")
           echo "POLICY_VERSION=$POLICY_VERSION" >> "$GITHUB_ENV"
+          echo "GATE_ROOT=.gate-root" >> "$GITHUB_ENV"
 
       - name: 从原始产物重建门禁输入
+        id: rebuild
+        continue-on-error: true    # 失败也要让后面的门禁步骤产出 INCOMPLETE 报告
         run: |
           set -euo pipefail
           # 重建脚本已实现（scripts/rebuild_run_json.py，受保护路径：改它等于改证据来源）。
-          # 取受保护版本的那一份，不用候选工作副本里的版本。
+          # 用可信判定树里那一份，不用候选工作副本里的版本。
           RUN_ID="${CANDIDATE_SHA:0:12}"
-          RAW_DIR=$(find qa/runs -type d -name raw | head -1 || true)
-          if [ -z "$RAW_DIR" ]; then
-            echo "原始产物缺失 → 证据不完整。门禁应判 INCOMPLETE。" >&2
+
+          # 多份分片全部传入：上一版 `find ... | head -1` 只取一份目录，
+          # 分片一多就会静默漏掉一部分结果。
+          RAW_ARGS=()
+          while IFS= read -r d; do
+            RAW_ARGS+=(--raw "$d")
+          done < <(find ci-artifacts/raw -type d -name raw 2>/dev/null || true)
+          if [ ${#RAW_ARGS[@]} -eq 0 ] && [ -d ci-artifacts/raw ]; then
+            RAW_ARGS+=(--raw ci-artifacts/raw)
+          fi
+          if [ ${#RAW_ARGS[@]} -eq 0 ]; then
+            echo "原始产物缺失 → 证据不完整。门禁会判 INCOMPLETE。" >&2
             echo "不要用候选分支里的 run.json 补位。" >&2
             exit 1
           fi
-          # 需求基线的版本与哈希必须取**受保护分支上已确认的那一份**。
-          # qa/baseline 为空时这里会失败，那是正确行为：没有分母就没有覆盖率，
-          # 应当是 INCOMPLETE，而不是按"矩阵里有什么就算什么"放行。
-          if ! git cat-file -e "$TARGET_SHA:qa/baseline" 2>/dev/null; then
-            echo "受保护分支上没有 qa/baseline → 覆盖率无分母。" >&2
+
+          # 需求基线必须是**受保护分支上已确认且有效**的那一份。
+          # 上一版用 `git cat-file -e $TARGET_SHA:qa/baseline` 判目录存在 ——
+          # 只有 .gitkeep 的目录同样存在，等于把"没有基线"当成"有基线"。
+          BASELINE_FILE=$(find .gate-root/qa/baseline -name requirements.yaml \
+            -type f 2>/dev/null | head -1 || true)
+          if [ -z "$BASELINE_FILE" ]; then
+            echo "受保护分支上没有有效的 requirements.yaml → 覆盖率无分母。" >&2
             echo "这是待交付的数据缺口（需求基线由人维护），不是脚本缺失。" >&2
             exit 1
           fi
-          BASELINE_VERSION=$(git rev-parse "$TARGET_SHA:qa/baseline")
-          mkdir -p .gate-baseline
-          git archive "$TARGET_SHA" qa/baseline | tar -x -C .gate-baseline
-          BASELINE_HASH=$(find .gate-baseline/qa/baseline -type f -print0 \
-            | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -d' ' -f1)
-          mkdir -p "qa/runs/$RUN_ID"
-          python3 .gate-policy/scripts/rebuild_run_json.py \
-            --raw "$RAW_DIR" \
-            --out "qa/runs/$RUN_ID/run.json" \
+
+          mkdir -p ".gate-root/qa/runs/$RUN_ID"
+          # baseline_version / baseline_hash 由 --baseline-file 推出：
+          # 算法复用 trace_matrix.compute_baseline_hash。上一版在这里用 git tree SHA
+          # 和"文件哈希清单的哈希"，与消费者的 meta.baseline_version 和
+          # 规范化内容 sha256 是两套契约，有真实基线也对不上。
+          python3 .gate-root/scripts/rebuild_run_json.py \
+            "${RAW_ARGS[@]}" \
+            --out ".gate-root/qa/runs/$RUN_ID/run.json" \
             --run-id "$RUN_ID" \
             --candidate-sha "$CANDIDATE_SHA" \
             --target-sha "$TARGET_SHA" \
             --policy-version "$POLICY_VERSION" \
-            --baseline-version "$BASELINE_VERSION" \
-            --baseline-hash "$BASELINE_HASH"
+            --baseline-file "$BASELINE_FILE" \
+            --node-id-strategy "${QA_NODE_ID_STRATEGY:-pytest}"
 
       - name: 追溯与覆盖
+        if: always()
         run: |
-          python3 .gate-policy/scripts/trace_matrix.py --root . --fail-on-gap || true
+          python3 .gate-root/scripts/trace_matrix.py --root .gate-root --fail-on-gap || true
           # 这里不 fail，缺口由 gate_check 汇总成三态结论，避免两处各判一半
 
       - name: 门槛变化扫描（提示，非结论）
+        if: always()
         run: |
           set -euo pipefail
           git diff "origin/${{ github.base_ref }}...HEAD" > candidate.diff
-          python3 .gate-policy/scripts/guard_scan.py \
+          python3 .gate-root/scripts/guard_scan.py \
             --root . --diff-file candidate.diff --with-waivers
 
       - name: 合并门禁判定
         id: gate
+        if: always()               # 上游失败也要产出结论报告（应为 INCOMPLETE）
         run: |
           set -euo pipefail
           # TODO(待用户输入): review_mode 取 manual 还是 automated_required，
@@ -187,8 +223,8 @@ jobs:
           #
           # TODO(待用户输入): --human-approval-ref 需从平台审批记录 API 取，
           #   不读仓库内文件。manual 模式下缺它一律 INCOMPLETE。
-          python3 .gate-policy/scripts/gate_check.py \
-            --root . \
+          python3 .gate-root/scripts/gate_check.py \
+            --root .gate-root \
             --candidate-sha "$CANDIDATE_SHA" \
             --target-sha "$TARGET_SHA" \
             --policy-version "$POLICY_VERSION" \
@@ -208,6 +244,9 @@ jobs:
 # ---------------------------------------------------------------------------
 # 尚未落地的部分（不要当成已实现）
 # ---------------------------------------------------------------------------
+#
+# · 本 workflow 从未在远端实际运行过（当前提交的 Actions runs 为 0）。下面写的是
+#   静态调用链上已修正的问题，**不等于**端到端跑通过。首次真实运行前不要宣称链路完成。
 #
 # · 「从原始产物重建门禁输入」**已实现**：scripts/rebuild_run_json.py
 #   （JUnit XML → run.json，六字段版本绑定缺一即拒，脱敏 + 截断，
