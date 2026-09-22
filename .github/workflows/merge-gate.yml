@@ -107,14 +107,38 @@ jobs:
 
       - run: pip install -r requirements-ci.txt
 
-      - name: 下载原始产物（落到专属空目录，避免与候选 checkout 混淆）
+      - name: 准备产物目录（checkout 之外，必须为空且无符号链接）
+        run: |
+          set -euo pipefail
+          # "换一个目录"不等于"候选之外的干净目录"：候选可以在仓库里预置
+          # ci-artifacts/raw，甚至放符号链接指向别处。所以目录放在 $RUNNER_TEMP 下，
+          # 并且必须由本步骤新建。
+          if [ -e "$RAW_ROOT" ]; then
+            echo "FATAL: $RAW_ROOT 已存在，拒绝复用（无法区分来源）" >&2
+            exit 1
+          fi
+          mkdir -p "$RAW_ROOT"
+
+      - name: 下载原始产物（落到 checkout 之外的专属空目录）
+        id: download
         uses: actions/download-artifact@v4
         continue-on-error: true    # 产物缺失本身就是证据不完整 → INCOMPLETE
         with:
           name: raw-test-artifacts
-          # 刻意不下到 qa/runs/：候选 checkout 里可能自带 qa/runs/*/raw，
-          # 混在一起就分不清哪份是可信执行产出的。
-          path: ci-artifacts/raw
+          path: ${{ env.RAW_ROOT }}
+
+      - name: 校验产物目录边界
+        if: always()
+        run: |
+          set -euo pipefail
+          # 符号链接会让"目录内"这个约束失效
+          LINKS=$(find "$RAW_ROOT" -type l 2>/dev/null || true)
+          if [ -n "$LINKS" ]; then
+            echo "FATAL: 产物目录含符号链接，拒绝使用：" >&2
+            echo "$LINKS" >&2
+            exit 1
+          fi
+          echo "RAW_DOWNLOAD_OUTCOME=${{ steps.download.outcome }}" >> "$GITHUB_ENV"
 
       - name: 组装可信判定树（受保护的规则与基线 + 候选的用例与重建产物）
         run: |
@@ -130,23 +154,41 @@ jobs:
           echo "CANDIDATE_SHA=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_ENV"
 
           rm -rf .gate-root
-          mkdir -p .gate-root
+          mkdir -p .gate-root/qa
           # 受保护侧：判定脚本 + 门禁规则 + 需求基线
           git archive "$TARGET_SHA" scripts qa/plan qa/baseline | tar -x -C .gate-root
           # 候选侧：用例（qa-design 的产出，本就属于候选变更）
           if [ -d qa/cases ]; then
-            mkdir -p .gate-root/qa
             cp -R qa/cases .gate-root/qa/
           fi
-          # 候选侧：collect 清单（由可信执行层产出，随原始产物一起来更好；
-          # 暂无独立产物时退回候选副本，并在报告里以 automation_evidence 体现来源风险）
+          # 候选侧：**缺陷记录必须带进来**。上一版的目录清单漏了它，实测后果是：
+          # 同一套基线/规则/用例/运行结果，带缺陷记录时门禁 FAIL
+          # （BLOCKING_DEFECT_NOT_CLEARED），按当时清单组装后变成 PASS / findings=[] ——
+          # 已确认阻断因为"输入没带进来"而消失。
+          # 但带进来也只是候选副本：候选能自行关闭或删除缺陷，所以下面的来源声明里
+          # 必须如实写 candidate_copy，由 gate 判 INCOMPLETE，而不是当成"零阻断"。
+          if [ -d qa/defects ]; then
+            cp -R qa/defects .gate-root/qa/
+            DEFECT_SOURCE_KIND=candidate_copy
+          else
+            DEFECT_SOURCE_KIND=candidate_copy
+          fi
+          # 候选侧：collect 清单。可信做法是由执行层随原始产物一起产出；
+          # 退回候选副本时同样如实声明 candidate_copy。
           if [ -d qa/trace ]; then
             cp -R qa/trace .gate-root/qa/ || true
+            COLLECT_SOURCE_KIND=candidate_copy
+          else
+            COLLECT_SOURCE_KIND=candidate_copy
           fi
+          echo "DEFECT_SOURCE_KIND=$DEFECT_SOURCE_KIND" >> "$GITHUB_ENV"
+          echo "COLLECT_SOURCE_KIND=$COLLECT_SOURCE_KIND" >> "$GITHUB_ENV"
 
           POLICY_VERSION=$(git rev-parse "$TARGET_SHA:qa/plan")
           echo "POLICY_VERSION=$POLICY_VERSION" >> "$GITHUB_ENV"
           echo "GATE_ROOT=.gate-root" >> "$GITHUB_ENV"
+          # 产物落到 checkout 之外：候选可以在仓库里预置任何目录
+          echo "RAW_ROOT=$RUNNER_TEMP/ci-artifacts/raw" >> "$GITHUB_ENV"
 
       - name: 从原始产物重建门禁输入
         id: rebuild
@@ -162,13 +204,15 @@ jobs:
           RAW_ARGS=()
           while IFS= read -r d; do
             RAW_ARGS+=(--raw "$d")
-          done < <(find ci-artifacts/raw -type d -name raw 2>/dev/null || true)
-          if [ ${#RAW_ARGS[@]} -eq 0 ] && [ -d ci-artifacts/raw ]; then
-            RAW_ARGS+=(--raw ci-artifacts/raw)
+          done < <(find "$RAW_ROOT" -type d -name raw 2>/dev/null || true)
+          if [ ${#RAW_ARGS[@]} -eq 0 ] && [ -n "$(ls -A "$RAW_ROOT" 2>/dev/null)" ]; then
+            RAW_ARGS+=(--raw "$RAW_ROOT")
           fi
-          if [ ${#RAW_ARGS[@]} -eq 0 ]; then
-            echo "原始产物缺失 → 证据不完整。门禁会判 INCOMPLETE。" >&2
-            echo "不要用候选分支里的 run.json 补位。" >&2
+          if [ ${#RAW_ARGS[@]} -eq 0 ] || [ "${RAW_DOWNLOAD_OUTCOME:-failure}" != "success" ]; then
+            # 下载失败或目录为空 → 证据不完整。**不得**退回候选 checkout 里的
+            # qa/runs/*/raw 补位：那份文件候选可以任意写。
+            echo "可信产物缺失（download outcome=${RAW_DOWNLOAD_OUTCOME:-unset}）" >&2
+            echo "→ 证据不完整，门禁会判 INCOMPLETE。不要用候选分支里的产物或 run.json 补位。" >&2
             exit 1
           fi
 
@@ -196,7 +240,39 @@ jobs:
             --target-sha "$TARGET_SHA" \
             --policy-version "$POLICY_VERSION" \
             --baseline-file "$BASELINE_FILE" \
-            --node-id-strategy "${QA_NODE_ID_STRATEGY:-pytest}"
+            --node-id-strategy "${QA_NODE_ID_STRATEGY:-pytest}" \
+            --retry-order "${QA_RETRY_ORDER:-none}"
+          # retry-order 默认 none：JUnit 没有尝试序号，重复记录的顺序无从确定，
+          # 出现重复即记为证据不完整。只有确认适配器保证"文档序 = 执行序"时才改成
+          # document-order，并且那是对适配器的声明，不是对结果的猜测。
+
+      - name: 写出证据来源声明（如实标注，不粉饰）
+        if: always()
+        run: |
+          set -euo pipefail
+          # gate 会读这份声明：任一类证据来自候选副本、或压根声明不了，一律 INCOMPLETE。
+          # 这一步刻意写 candidate_copy —— 当前 collect 与缺陷记录确实来自候选 checkout，
+          # 没有缺陷跟踪系统导出、也没有可信 collect 产物。写 trusted_ci 就是粉饰。
+          mkdir -p .gate-root/qa
+          RUNS_KIND=candidate_copy
+          RUNS_REF=""
+          if [ "${RAW_DOWNLOAD_OUTCOME:-failure}" = "success" ]; then
+            RUNS_KIND=trusted_ci
+            RUNS_REF="${{ github.run_id }}/${{ github.run_attempt }}"
+          fi
+          cat > .gate-root/qa/evidence-source.yaml <<YAML
+          collect:
+            kind: ${COLLECT_SOURCE_KIND:-candidate_copy}
+            ref: ""
+          runs:
+            kind: ${RUNS_KIND}
+            ref: "${RUNS_REF}"
+          defects:
+            kind: ${DEFECT_SOURCE_KIND:-candidate_copy}
+            ref: ""
+          YAML
+          echo "--- evidence-source.yaml ---"
+          cat .gate-root/qa/evidence-source.yaml
 
       - name: 追溯与覆盖
         if: always()
@@ -252,6 +328,14 @@ jobs:
 #   （JUnit XML → run.json，六字段版本绑定缺一即拒，脱敏 + 截断，
 #   解析失败或无 attempt 标记 incomplete）。该步骤现在失败只会因为两种**数据**原因：
 #   没有原始产物、或受保护分支上没有 qa/baseline。两者都应当导致 INCOMPLETE。
+#
+# · **当前这份 workflow 组装出来的证据来源必然导致 INCOMPLETE**，这是刻意的：
+#   collect 清单与缺陷记录都来自候选 checkout（candidate_copy），没有缺陷跟踪系统导出，
+#   也没有可信 collect 产物。要真正通过，需要：
+#     1. 执行层随原始产物一起上传 collect 清单（kind: trusted_ci + ref）
+#     2. 缺陷记录改为从跟踪系统导出（kind: tracker + 查询/导出 ref）
+#   在此之前"零阻断"不成立 —— 缺陷输入缺失或可被候选改动时，门禁必须判 INCOMPLETE，
+#   不能等同于"没有阻断缺陷"。
 #
 # · run-tests 的 collect / 执行两步仍是 `exit 1` 占位，且是**真正的待输入**：
 #   需要被测项目的框架、启动命令与原生报告格式。填之前这份 workflow 会失败，

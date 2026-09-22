@@ -287,6 +287,19 @@ item 8（工具级委派写入）仍未闭环，且不能由 shell 包装器代�
       而单测全绿。现在断言的对象是门禁最终结论：正例 PASS；一份好报告 + 一份损坏/空报告
       必须 INCOMPLETE；映射策略错必须不通过；失败是 FAIL 而 skip 是 INCOMPLETE；
       运行后改基线必须 EVIDENCE_STALE
+- [x] 证据来源可信性判据（2026-09-22，第四轮复核 P1）：`qa/evidence-source.yaml` +
+      `gate_check.check_evidence_sources`。声明缺失、条目缺失、`candidate_copy`、
+      未知 kind、可信来源无 ref 一律 INCOMPLETE。**"缺输入"不得等同"零阻断"** ——
+      实测反例：判定树漏掉 `qa/defects` 时，已确认阻断缺陷从 FAIL 变成 PASS/findings=[]
+- [x] 重试顺序不猜（第四轮复核 P2）：JUnit 无尝试序号，重复记录默认记
+      `DUPLICATE_ATTEMPTS_WITHOUT_ORDER_EVIDENCE` 并置 `interrupted`；
+      只有 `--retry-order document-order` 显式声明适配器保证顺序时才分配序号
+- [x] 缺证据分支也落盘报告（第四轮复核 P2）：`always()` 只保证步骤被执行，不保证脚本写文件
+- [ ] **CI 证据来源升级为可信（当前必然 INCOMPLETE，需要外部输入）**：
+  - [ ] 执行层随原始产物上传 collect 清单（`kind: trusted_ci` + ref）
+  - [ ] 缺陷记录改为从跟踪系统导出（`kind: tracker` + 查询/导出 ref）—— 需用户指定系统
+  - [ ] 当前 workflow 如实声明 `candidate_copy`，因此组装出来的证据一定判 INCOMPLETE；
+        这是刻意的，不要为了"让门禁绿"而改成 `trusted_ci`
 - [ ] 对接真实测试框架的 collect/执行两步（**仍阻塞于用户提供 v1 场景仓库**）
       （已纳入 CODEOWNERS —— 改它等于改证据来源）
 

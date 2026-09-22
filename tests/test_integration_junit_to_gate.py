@@ -140,12 +140,26 @@ def codes(rep):
     return [f.code for f in rep.findings]
 
 
+def write_evidence_source(root):
+    """证据来源声明：CI 组装判定树时必须写，缺它一律 INCOMPLETE。"""
+    data = {
+        "collect": {"kind": "trusted_ci", "ref": "ci-run/999"},
+        "runs": {"kind": "trusted_ci", "ref": "ci-run/999"},
+        "defects": {"kind": "tracker", "ref": "tracker-query/QA-1"},
+    }
+    path = root / "qa" / "evidence-source.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                    encoding="utf-8")
+
+
 @pytest.fixture()
 def repo(tmp_path):
     baseline_path, data = write_baseline(tmp_path)
     write_cases(tmp_path)
     write_collected(tmp_path)
     write_scope(tmp_path)
+    write_evidence_source(tmp_path)
     return tmp_path, baseline_path, data["meta"]["content_hash"]
 
 
@@ -325,8 +339,12 @@ def test_unmapped_entries_make_run_incomplete(repo):
     assert any("NODE_ID_UNMAPPED" in r for r in run["incomplete_reasons"])
 
 
-def test_retry_produces_incrementing_attempt_numbers(repo):
-    """同一 node_id 出现两次 = 重试，attempt 序号必须递增（先失败后通过的判定依赖它）。"""
+def test_duplicate_records_without_order_evidence_are_incomplete(repo):
+    """同一 node_id 出现两次，默认不猜顺序：记为证据不完整。
+
+    JUnit 没有尝试序号。重复可能是重试、分片重复或不同环境；而"先失败后通过不得自动
+    抹掉阻断"恰恰依赖顺序。把计数器提到全局只解决"都变成 1"这个表象。
+    """
     root, baseline_path, bhash = repo
     extra = ('<testcase classname="%s" name="%s" time="0.02"/>\n'
              % (JUNIT_CLASSNAME, JUNIT_NAME))
@@ -335,8 +353,81 @@ def test_retry_produces_incrementing_attempt_numbers(repo):
     proc, out = run_rebuild(root, raw, baseline_path)
     assert proc.returncode == 0
     run = json.loads(out.read_text())
+    assert run["interrupted"] is True
+    assert any("DUPLICATE_ATTEMPTS_WITHOUT_ORDER_EVIDENCE" in r
+               for r in run["incomplete_reasons"])
+    rep = gc.evaluate(root, FEATURE, binding(bhash))
+    assert rep.verdict != gc.VERDICT_PASS
+
+
+def test_retry_order_declared_assigns_sequence(repo):
+    """显式声明 document-order 时才分配序号，并把该假设写进报告。"""
+    root, baseline_path, bhash = repo
+    extra = ('<testcase classname="%s" name="%s" time="0.02"/>\n'
+             % (JUNIT_CLASSNAME, JUNIT_NAME))
+    raw = write_junit(root, inner='<failure message="first try"/>',
+                      extra_cases=extra)
+    proc, out = run_rebuild(root, raw, baseline_path,
+                            extra=["--retry-order", "document-order"])
+    assert proc.returncode == 0
+    run = json.loads(out.read_text())
     seq = [(a["attempt"], a["status"]) for a in run["attempts"]]
     assert seq == [(1, "failed"), (2, "passed")], seq
+    assert run["interrupted"] is False
+    assert "执行顺序" in run["retry_order_assumption"]
+
+
+def test_cross_file_duplicates_are_grouped_not_reset(repo):
+    """跨文件的同一 node_id 必须视为同一组，不能每个文件各自从 1 开始。"""
+    root, baseline_path, bhash = repo
+    raw = write_junit(root, name="first.xml",
+                     inner='<failure message="first"/>')
+    write_junit(root, name="second.xml")
+    proc, out = run_rebuild(root, raw, baseline_path,
+                            extra=["--retry-order", "document-order"])
+    assert proc.returncode == 0
+    run = json.loads(out.read_text())
+    seq = sorted((a["attempt"], a["status"]) for a in run["attempts"])
+    assert seq == [(1, "failed"), (2, "passed")], seq
+    assert run["duplicate_keys"], "跨文件重复未被识别"
+
+
+def test_map_strategy_parametrized_node_id_matches_collect(tmp_path):
+    """map 策略下参数化映射必须拆出 base node_id，否则与 collect 对不上。
+
+    第一版返回原 mapping 值，node_id 带着 [one] 后缀、同时又给 params=one，
+    整链直接 REQUIRED_CASE_NOT_EXECUTED。
+    """
+    node, params, note = rr.map_node_id(
+        "tests.test_login", "test_ok",
+        "map", {"tests.test_login::test_ok": "tests/test_login.py::test_ok[one]"})
+    assert node == "tests/test_login.py::test_ok"
+    assert params == "one"
+
+
+def test_map_strategy_parametrized_full_chain(repo):
+    root, baseline_path, bhash = repo
+    # collect 按无后缀 node_id + params 匹配
+    path = root / "qa" / "trace" / FEATURE / "collected.json"
+    path.write_text(json.dumps({"tests": [{"node_id": NODE_ID,
+                                           "params": "one",
+                                           "cases": ["TC-1"]}]}),
+                    encoding="utf-8")
+    raw = write_junit(root)
+    mapping = {"%s::%s" % (JUNIT_CLASSNAME, JUNIT_NAME): "%s[one]" % NODE_ID}
+    map_file = root / "node-id-map.json"
+    map_file.write_text(json.dumps(mapping), encoding="utf-8")
+    proc, out = run_rebuild(root, raw, baseline_path, strategy="map",
+                            extra=["--node-id-map", str(map_file)])
+    assert proc.returncode == 0, proc.stdout.decode()
+    run = json.loads(out.read_text())
+    assert run["attempts"][0]["node_id"] == NODE_ID
+    assert run["attempts"][0]["params"] == "one"
+
+    rep = gc.evaluate(root, FEATURE, binding(bhash))
+    found = [f.code for f in rep.findings]
+    assert "REQUIRED_CASE_NOT_EXECUTED" not in found, found
+    assert "REQUIRED_CASE_RESULT_MISSING" not in found, found
 
 
 # --------------------------------------------------------------------------

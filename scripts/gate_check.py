@@ -454,6 +454,84 @@ def check_results(trace, policy, blocking_severities, findings):
     return gate_accepted
 
 
+EVIDENCE_KINDS = {
+    "collect": {"trusted_ci"},
+    "runs": {"trusted_ci"},
+    "defects": {"tracker"},
+}
+UNTRUSTED_KIND = "candidate_copy"
+
+
+def check_evidence_sources(root, findings):
+    """证据来源可信性：**缺失不等于零阻断，候选副本不等于可信**。
+
+    为什么需要这一条（外部复核实测出的两个洞）：
+
+    1. CI 组装判定树时漏掉了 `qa/defects`。同一套基线/规则/用例/运行结果，带缺陷记录时
+       门禁 FAIL（BLOCKING_DEFECT_NOT_CLEARED），按当时的目录清单组装后变成
+       **PASS / findings=[]** —— 已确认阻断因为"输入没带进来"而消失。
+       只靠"把目录加进清单"修不够：目录为空时同样会静默变成"零阻断"。
+    2. 原始产物与 collect 清单允许退回候选副本。候选能任意增删自己的证据，
+       "文件存在且能解析"不构成可信。
+
+    所以判定前要求一份来源声明 `qa/evidence-source.yaml`：
+
+        collect: {kind: trusted_ci, ref: "<artifact/run 标识>"}
+        runs:    {kind: trusted_ci, ref: "..."}
+        defects: {kind: tracker,    ref: "<查询/导出标识>"}
+
+    缺文件、缺条目、`kind` 不在可信取值内（例如 candidate_copy）、可信来源缺 `ref`，
+    一律记 EVIDENCE_MISSING → 三态判定收敛到 INCOMPLETE。这不是阈值发明，
+    是把"我们不知道这份证据从哪来"如实表达成"证据不足"。
+    """
+    path = root / "qa" / "evidence-source.yaml"
+    data = load_yaml(path)
+    if data is None:
+        findings.append(Finding(
+            "EVIDENCE_SOURCE_UNDECLARED", "EVIDENCE_MISSING", str(path),
+            "缺少证据来源声明 —— 无法确认 collect/运行结果/缺陷记录来自可信执行还是"
+            "候选副本。缺失不得等同于零阻断"))
+        return
+
+    if not isinstance(data, dict):
+        findings.append(Finding(
+            "EVIDENCE_SOURCE_INVALID", "EVIDENCE_MISSING", str(path),
+            "证据来源声明不是映射结构"))
+        return
+
+    for kind_name, trusted_values in sorted(EVIDENCE_KINDS.items()):
+        entry = data.get(kind_name)
+        if not isinstance(entry, dict):
+            findings.append(Finding(
+                "EVIDENCE_SOURCE_ENTRY_ABSENT", "EVIDENCE_MISSING", kind_name,
+                "证据来源声明缺少 {} 条目 —— 无法判断其可信性".format(kind_name)))
+            continue
+        kind = entry.get("kind")
+        if not kind:
+            findings.append(Finding(
+                "EVIDENCE_SOURCE_KIND_ABSENT", "EVIDENCE_MISSING", kind_name,
+                "{} 未声明 kind".format(kind_name)))
+            continue
+        if kind == UNTRUSTED_KIND:
+            findings.append(Finding(
+                "EVIDENCE_SOURCE_UNTRUSTED", "EVIDENCE_MISSING", kind_name,
+                "{} 来自候选副本（kind={}）—— 候选可任意增删该证据，"
+                "不能据此判通过；需改为 {}".format(
+                    kind_name, kind, sorted(trusted_values))))
+            continue
+        if kind not in trusted_values:
+            findings.append(Finding(
+                "EVIDENCE_SOURCE_KIND_UNKNOWN", "EVIDENCE_MISSING", kind_name,
+                "{} 的 kind={} 不在可信取值 {} 内".format(
+                    kind_name, kind, sorted(trusted_values))))
+            continue
+        if not entry.get("ref"):
+            findings.append(Finding(
+                "EVIDENCE_SOURCE_REF_ABSENT", "EVIDENCE_MISSING", kind_name,
+                "{} 声明为可信来源 {} 但没有 ref —— 无法回溯到具体导出/运行".format(
+                    kind_name, kind)))
+
+
 def check_run_integrity(root, feature, binding, findings):
     """执行完整性：结果缺失、执行中断、证据版本不匹配。"""
     run_dir = root / "qa" / "runs"
@@ -535,6 +613,7 @@ def evaluate(root, feature, binding, trace=None, guard_result=None):
     check_binding(binding, findings, trace=trace)
     check_trace(trace, findings)
     check_run_integrity(root, feature, binding, findings)
+    check_evidence_sources(root, findings)
     gate_accepted = check_results(trace, policy, blocking_sev, findings)
 
     # 只消费**已验证**的处置记录；未验证的本地 JSON 一律不作数
@@ -674,9 +753,35 @@ def main():
         ).as_dict()
     features = [args.feature] if args.feature else tm.discover_features(root)
     if not features:
+        # 可预期的缺证据分支也必须**落盘**一份机器可读报告。
+        # 外部复核实测：无有效基线时这里提前 return，stdout 显示 INCOMPLETE 但
+        # --out 指向的文件根本不存在 —— CI 里的 `if: always()` 只保证步骤被尝试执行，
+        # 不保证脚本写了文件，下游会读到上一次的旧报告或什么都读不到。
         msg = "qa/baseline/ 下没有任何 feature —— 无需求基线，门禁无从判定"
-        print(json.dumps({"verdict": VERDICT_INCOMPLETE, "detail": msg},
-                         indent=2, ensure_ascii=False) if args.json else msg)
+        payload = {
+            "verdict": VERDICT_INCOMPLETE,
+            "feature": args.feature,
+            "detail": msg,
+            "binding": {
+                "candidate_sha": args.candidate_sha,
+                "target_sha": args.target_sha,
+                "policy_version": args.policy_version,
+            },
+            "findings": [{
+                "code": "BASELINE_ABSENT",
+                "kind": "EVIDENCE_MISSING",
+                "subject": str(root / "qa" / "baseline"),
+                "detail": msg,
+            }],
+            "note": "本报告由缺证据分支生成；verdict 固定为 INCOMPLETE。",
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False)
+              if args.json else msg)
+        if args.out:
+            out = pathlib.Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
+                           encoding="utf-8")
         return 1
 
     exit_code = 0

@@ -171,8 +171,12 @@ def map_node_id(classname: str, name: str, strategy: str, mapping: dict = None):
     mapping = mapping or {}
     raw_key = "%s::%s" % (classname, name) if classname else name
     if raw_key in mapping:
+        # 返回**拆分后的 base**。第一版算了 base 却返回原值，映射到
+        # `...::test_ok[one]` 时输出的 node_id 带着 `[one]` 后缀、同时又给了 params=one，
+        # 而 collect 是按"无后缀 node_id + params"匹配的 —— 整链直接判
+        # REQUIRED_CASE_NOT_EXECUTED。
         base, params = split_params(mapping[raw_key])
-        return mapping[raw_key], params, None
+        return base, params, None
 
     if strategy == "map":
         return None, None, "NODE_ID_UNMAPPED: %s" % raw_key
@@ -218,7 +222,6 @@ def parse_junit(path: str, strategy: str = "pytest", mapping: dict = None):
 
     attempts = []
     notes = []
-    seen = {}
     for case in _iter_testcases(tree.getroot()):
         status, message = _case_status(case)
         classname = case.get("classname") or ""
@@ -230,13 +233,12 @@ def parse_junit(path: str, strategy: str = "pytest", mapping: dict = None):
             # 映射不出 node_id 的记录不能悄悄丢：下游会因此少算执行范围
             continue
 
-        # 同一 node_id|params 多次出现 = 重试，attempt 序号递增
-        key = "%s|%s" % (node_id, params if params is not None else "")
-        seen[key] = seen.get(key, 0) + 1
-
+        # attempt 序号在 build() 里跨全部文件统一分配：
+        # 在单个文件里分配会让同一 node_id 出现在 first.xml 与 second.xml 时都变成
+        # attempt=1，"先失败后通过"的判定就没有顺序依据了。
         attempt = {
             "node_id": node_id,
-            "attempt": seen[key],
+            "attempt": None,
             "status": status,
             "duration_s": None,
             "source_file": os.path.basename(path),
@@ -274,7 +276,7 @@ def collect_raw_files(raw_dirs) -> list:
 
 
 def build(raw_files, binding: dict, strategy: str = "pytest",
-          mapping: dict = None) -> dict:
+          mapping: dict = None, retry_order: str = "none") -> dict:
     attempts = []
     sources = []
     parse_errors = []
@@ -302,12 +304,38 @@ def build(raw_files, binding: dict, strategy: str = "pytest",
                 parse_errors.append("EMPTY_REPORT: %s（零个 testcase）" % path)
         sources.append(entry)
 
+    # ---- attempt 序号：跨文件统一分配，且**不猜顺序** ----
+    #
+    # JUnit 没有标准的"第几次尝试"字段。同一 node_id|params 出现多次，可能是重试，
+    # 也可能是分片重复或不同环境跑了同一个测试。把计数器提到全局只解决了"都变成 1"
+    # 这个表象，解决不了"哪次在前"这个问题 —— 而"先失败后通过不得自动抹掉阻断"
+    # 恰恰依赖顺序。
+    #
+    # 所以默认 retry_order="none"：出现重复即记为证据不完整，由人或适配器补顺序依据。
+    # 只有调用方显式声明 retry_order="document-order"（即该框架/适配器保证 XML 文档序
+    # 等于执行序、且 --raw 的传入顺序等于执行顺序）时才分配序号，并把这个假设写进报告。
+    grouped = {}
+    for a in attempts:
+        key = "%s|%s" % (a["node_id"], a.get("params") or "")
+        grouped.setdefault(key, []).append(a)
+
+    duplicates = sorted(k for k, v in grouped.items() if len(v) > 1)
+    for key, seq in grouped.items():
+        for i, a in enumerate(seq, start=1):
+            a["attempt"] = i if (len(seq) == 1 or retry_order == "document-order") else 1
+
     counts = {}
     for a in attempts:
         counts[a["status"]] = counts.get(a["status"], 0) + 1
 
     unmapped = [n for n in mapping_notes if n.startswith("NODE_ID_UNMAPPED")]
     incomplete_reasons = list(parse_errors)
+    if duplicates and retry_order != "document-order":
+        incomplete_reasons.append(
+            "DUPLICATE_ATTEMPTS_WITHOUT_ORDER_EVIDENCE: %s —— 同一 node_id|params 出现多次"
+            "（重试？分片重复？不同环境？），JUnit 没有尝试序号，顺序无从确定。"
+            "需要框架的尝试序号/时间戳/运行来源，或用 --retry-order document-order "
+            "显式声明适配器保证文档序等于执行序" % duplicates)
     if not attempts:
         incomplete_reasons.append("NO_ATTEMPTS")
     incomplete_reasons.extend(unmapped)
@@ -333,6 +361,12 @@ def build(raw_files, binding: dict, strategy: str = "pytest",
         # 真实配置标识应由执行层写入且必须已脱敏。
         "config": {},
         "node_id_strategy": strategy,
+        "retry_order": retry_order,
+        "retry_order_assumption": (
+            "调用方声明：原始报告的文档序与 --raw 传入顺序等于执行顺序"
+            if retry_order == "document-order" else
+            "未声明顺序依据；重复记录不分配可信序号"),
+        "duplicate_keys": duplicates,
         "mapping_notes": mapping_notes,
         "sources": sources,
         "attempts": attempts,
@@ -398,6 +432,11 @@ def main(argv=None) -> int:
                     choices=["pytest", "raw", "map"])
     ap.add_argument("--node-id-map", default=None,
                     help="JSON 文件：{\"classname::name\": \"真实 node_id\"}")
+    ap.add_argument("--retry-order", default="none",
+                    choices=["none", "document-order"],
+                    help="重复记录的顺序依据。none（默认）= 无依据，出现重复即记为证据"
+                         "不完整；document-order = 调用方声明适配器保证文档序与 --raw "
+                         "传入顺序等于执行顺序")
     args = ap.parse_args(argv)
 
     if args.baseline_file:
@@ -454,7 +493,8 @@ def main(argv=None) -> int:
               "不要用本地副本补位。" % args.raw, file=sys.stderr)
         return EX_DATAERR
 
-    run = build(raw_files, required, args.node_id_strategy, mapping)
+    run = build(raw_files, required, args.node_id_strategy, mapping,
+                args.retry_order)
 
     out_dir = os.path.dirname(os.path.abspath(args.out))
     if out_dir:

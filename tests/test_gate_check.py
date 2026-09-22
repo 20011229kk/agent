@@ -155,6 +155,33 @@ def codes(rep):
     return [f.code for f in rep.findings]
 
 
+def write_evidence_source(root, collect="trusted_ci", runs="trusted_ci",
+                         defects="tracker", refs=True):
+    """证据来源声明。缺它一律 INCOMPLETE（缺失不等于零阻断）。"""
+    def entry(kind):
+        e = {"kind": kind}
+        if refs:
+            e["ref"] = "ci-run/12345"
+        return e
+
+    data = {"collect": entry(collect), "runs": entry(runs),
+            "defects": entry(defects)}
+    path = root / "qa" / "evidence-source.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                    encoding="utf-8")
+    return path
+
+
+@pytest.fixture(autouse=True)
+def _evidence_source(tmp_path):
+    """所有 gate 测试默认带可信来源声明，否则每条都会因 INCOMPLETE 而失去区分度。
+
+    来源可信性本身的反例在 test_evidence_source_* 里单独测。
+    """
+    write_evidence_source(tmp_path)
+
+
 @pytest.fixture()
 def clean(tmp_path):
     """一切正常、应当 PASS 的最小仓库。"""
@@ -1194,3 +1221,125 @@ def test_render_text_shows_both_failure_kinds_distinctly(clean):
     assert "质量失败" in text
     assert "证据缺失" in text
     assert "未验证项" in text
+
+
+# ---------------------------------------------------------------------------
+# 证据来源可信性（外部复核：判定树漏掉缺陷记录 → 已确认阻断消失）
+# ---------------------------------------------------------------------------
+
+
+def test_evidence_source_missing_is_incomplete(clean):
+    """缺来源声明 → INCOMPLETE。缺失不得等同于"零阻断"。"""
+    root, h = clean
+    (root / "qa" / "evidence-source.yaml").unlink()
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert rep.verdict == gc.VERDICT_INCOMPLETE
+    assert "EVIDENCE_SOURCE_UNDECLARED" in codes(rep)
+
+
+@pytest.mark.parametrize("kind_name", ["collect", "runs", "defects"])
+def test_candidate_copy_source_is_untrusted(clean, kind_name):
+    """任一类证据来自候选副本 → INCOMPLETE。
+
+    候选能任意增删自己的缺陷记录与产物；"文件存在且能解析"不构成可信。
+    """
+    root, h = clean
+    kwargs = {kind_name: "candidate_copy"}
+    write_evidence_source(root, **kwargs)
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert rep.verdict == gc.VERDICT_INCOMPLETE
+    assert "EVIDENCE_SOURCE_UNTRUSTED" in codes(rep)
+    assert any(f.subject == kind_name for f in rep.findings
+               if f.code == "EVIDENCE_SOURCE_UNTRUSTED")
+
+
+def test_unknown_source_kind_is_incomplete(clean):
+    root, h = clean
+    write_evidence_source(root, runs="magic")
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "EVIDENCE_SOURCE_KIND_UNKNOWN" in codes(rep)
+    assert rep.verdict == gc.VERDICT_INCOMPLETE
+
+
+def test_trusted_source_without_ref_is_incomplete(clean):
+    """声明可信但没有 ref → 无法回溯到具体导出/运行。"""
+    root, h = clean
+    write_evidence_source(root, refs=False)
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "EVIDENCE_SOURCE_REF_ABSENT" in codes(rep)
+    assert rep.verdict == gc.VERDICT_INCOMPLETE
+
+
+def test_missing_entry_is_incomplete(clean):
+    root, h = clean
+    path = root / "qa" / "evidence-source.yaml"
+    path.write_text(yaml.safe_dump({"runs": {"kind": "trusted_ci",
+                                             "ref": "x"}}),
+                    encoding="utf-8")
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    found = codes(rep)
+    assert found.count("EVIDENCE_SOURCE_ENTRY_ABSENT") == 2, found  # collect + defects
+    assert rep.verdict == gc.VERDICT_INCOMPLETE
+
+
+def test_non_mapping_source_file_is_incomplete(clean):
+    root, h = clean
+    (root / "qa" / "evidence-source.yaml").write_text("- a\n- b\n", encoding="utf-8")
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert "EVIDENCE_SOURCE_INVALID" in codes(rep)
+
+
+def test_confirmed_blocking_defect_still_blocks_with_trusted_sources(clean):
+    """阳性对照：带可信来源声明时，已确认阻断缺陷必须照常 FAIL。
+
+    这条和上面几条一起构成"输入齐全时会阻断 / 输入缺失时不会静默通过"的对照。
+    """
+    root, h = clean
+    write_defect(root, "BUG-1", ["TC-1"], confirmed_blocking=True)
+    rep = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert rep.verdict == gc.VERDICT_FAIL
+    assert "BLOCKING_DEFECT_NOT_CLEARED" in codes(rep)
+
+
+def test_dropping_defects_dir_does_not_silently_pass(clean):
+    """复核的核心反例：把缺陷记录从判定输入里去掉，不得变成 PASS / findings=[]。
+
+    现在缺陷目录缺失时，来源声明仍要求 defects 为可信来源；若组装时漏掉整份证据，
+    声明也无从满足 → INCOMPLETE。
+    """
+    root, h = clean
+    write_defect(root, "BUG-1", ["TC-1"], confirmed_blocking=True)
+    before = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert before.verdict == gc.VERDICT_FAIL
+
+    # 模拟"组装判定树时漏掉 qa/defects"
+    import shutil
+    shutil.rmtree(root / "qa" / "defects")
+    # 同时模拟组装方只能声明它拿到的是候选副本 / 或干脆声明不了
+    (root / "qa" / "evidence-source.yaml").unlink()
+    after = gc.evaluate(root, FEATURE, binding(baseline_hash=h))
+    assert after.verdict != gc.VERDICT_PASS, codes(after)
+    assert after.verdict == gc.VERDICT_INCOMPLETE
+
+
+# ---------------------------------------------------------------------------
+# 缺证据分支也必须落盘报告（always() 不保证脚本写文件）
+# ---------------------------------------------------------------------------
+
+
+def test_report_written_even_when_no_baseline(tmp_path, monkeypatch, capsys):
+    """无有效基线时 CLI 提前 return，但 --out 必须已经写出 INCOMPLETE 报告。"""
+    out = tmp_path / "reports" / "merge-gate-report.json"
+    empty_root = tmp_path / "empty"
+    (empty_root / "qa").mkdir(parents=True)
+    monkeypatch.setattr(sys, "argv", [
+        "gate_check.py", "--root", str(empty_root), "--json",
+        "--candidate-sha", SHA_NEW, "--out", str(out),
+    ])
+    rc = gc.main()
+    assert rc == 1
+    assert out.is_file(), "缺基线时没有落盘报告 —— CI 的 always() 救不了这种情况"
+    data = json.loads(out.read_text())
+    assert data["verdict"] == gc.VERDICT_INCOMPLETE
+    assert data["findings"][0]["code"] == "BASELINE_ABSENT"
+    assert data["binding"]["candidate_sha"] == SHA_NEW

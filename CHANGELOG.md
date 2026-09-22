@@ -542,3 +542,71 @@ workflow YAML 可解析。
 一条——**新写的组件必须按消费方的契约写，并用跨组件的集成测试证明**。我为转换器写了 32 项
 单测，它们全部只验证"我打算输出什么"，没有一项验证"下游能不能用"。单测数量在这类缺陷面前
 完全没有信息量。
+
+### 第四轮复核：判定树漏输入会让已确认阻断消失，五条全修（2026-09-22）
+
+核对 `ecf1c32` 的复核确认上一轮的字段契约、完整性传递、Bearer 精确反例修复有效，
+但 **CI 输入组装仍有阻断风险**。五条全部成立。
+
+**P1 判定树漏掉缺陷记录 → 已确认阻断可以消失（最严重）**
+
+`.gate-root` 只带了脚本、`qa/plan`、`qa/baseline`、`qa/cases`、`qa/trace` 和重建后的
+`qa/runs`，**没有 `qa/defects`**。复核的等价反例：同一套基线/规则/用例/collect/运行结果，
+带缺陷记录 `BUG-1` 时门禁 `FAIL / BLOCKING_DEFECT_NOT_CLEARED`；按当时的目录清单组装后
+变成 **`PASS / findings=[]`**。阻断不是被判掉的，是被"输入没带进来"删掉的。
+
+只把目录加进清单不够——目录为空时同样会静默变成"零阻断"。所以引入**证据来源声明**
+`qa/evidence-source.yaml`，gate 新增 `check_evidence_sources`：
+
+| 情况 | 结论 |
+|---|---|
+| 声明文件缺失 | `EVIDENCE_SOURCE_UNDECLARED` → INCOMPLETE |
+| 缺 collect/runs/defects 任一条目 | `EVIDENCE_SOURCE_ENTRY_ABSENT` → INCOMPLETE |
+| `kind: candidate_copy` | `EVIDENCE_SOURCE_UNTRUSTED` → INCOMPLETE（候选可任意增删该证据） |
+| `kind` 不在可信取值内 | `EVIDENCE_SOURCE_KIND_UNKNOWN` → INCOMPLETE |
+| 声明可信但无 `ref` | `EVIDENCE_SOURCE_REF_ABSENT` → INCOMPLETE |
+
+workflow 相应把 `qa/defects` 带进判定树，并**如实**写来源声明：当前 collect 与缺陷记录
+确实来自候选 checkout，所以写 `candidate_copy`，结果是这份 workflow 组装出来的证据
+**必然判 INCOMPLETE**。这是刻意的：写 `trusted_ci` 就是粉饰。要真正通过，需要执行层随原始
+产物上传 collect 清单、缺陷记录改为从跟踪系统导出。
+
+**P1 产物目录未建立可信来源**
+
+"换个目录"不等于"候选之外的干净目录"：候选可以在仓库里预置 `ci-artifacts/raw`，甚至放
+符号链接。修复：产物落到 `$RUNNER_TEMP`（checkout 之外）；目录若已存在直接失败拒绝复用；
+下载后校验目录内无符号链接；下载失败或目录为空时**不退回候选产物**，直接让门禁 INCOMPLETE；
+所有分片作为多个 `--raw` 传入。
+
+**P2 `map` 策略的参数化 node_id 与消费者不匹配**
+
+代码算了 `base, params = split_params(...)` 却返回原 mapping 值，映射到
+`...::test_ok[one]` 时 node_id 带着后缀、同时又给 `params=one`，而 collect 按"无后缀
+node_id + params"匹配 → 整链 `REQUIRED_CASE_NOT_EXECUTED`。改为返回 `base`，
+并补 map 策略参数化的整链用例。
+
+**P2 跨文件重试序号重置**
+
+`seen` 建在每个文件内，同一 node_id 分别出现在 `first.xml`(failed) 与 `second.xml`(passed)
+时都是 `attempt=1`，"先失败后通过不得自动抹掉阻断"就失去顺序依据。但**把计数器提到全局
+并不等于解决**：重复可能是重试、分片重复或不同环境，JUnit 没有尝试序号。
+
+所以：序号改为跨文件统一分组分配，且默认 `--retry-order none` —— 出现重复即记
+`DUPLICATE_ATTEMPTS_WITHOUT_ORDER_EVIDENCE` 并置 `interrupted`，不按文件名排序猜"末次"。
+只有调用方显式声明 `--retry-order document-order`（即该适配器保证文档序与 `--raw` 传入
+顺序等于执行序）才分配序号，并把这个假设写进 `run.json` 的 `retry_order_assumption`。
+
+**P2 `always()` 不保证缺基线时写出报告**
+
+无有效基线时 `gate_check` CLI 在写 `--out` 之前提前 return：stdout 显示 INCOMPLETE，
+但报告文件不存在。CI 的 `if: always()` 只保证步骤被尝试执行，不保证脚本落盘，下游会读到
+旧报告或什么都读不到。修复：该分支也生成统一格式报告（`BASELINE_ABSENT` +
+verdict=INCOMPLETE + 当前 binding），并补测试断言文件确实存在。
+
+**验证**：`make check` = 183 项结构校验 PASS + 角色配置校验 PASS + **461 项测试通过**；
+workflow YAML 可解析。（上一轮汇报写的"181"是当时版本的输出，复核的 183 才是当前值。）
+
+**这一轮的教训**：前几轮是"判据比被测对象弱"和"没按消费方契约写"，这一轮是
+**判定输入的完整性本身没有判据**。门禁检查了结果、检查了版本绑定，却没有检查"该带进来的
+证据是不是都带进来了、它们从哪来"。缺输入导致的通过比判错更危险，因为它在报告里
+表现为 `findings=[]`——干净得看不出问题。
